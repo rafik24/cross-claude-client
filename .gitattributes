@@ -1,0 +1,6 @@
+# Normalise line endings so Linux (LF) and Windows git-bash checkouts hash identically.
+# These are all run under bash/node — LF is correct on every platform.
+*.sh   text eol=lf
+*.mjs  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
