@@ -251,10 +251,18 @@ li{margin:4px 0}</style></head>
     } catch (e) { next(e); }
   });
 
-  // POST /cc/stepdown — relinquish the leader role. Ack, then exit; the cc-bus supervisor
-  // watching this child treats the exit as "stepped down" and drops to client mode.
-  app.post("/cc/stepdown", (req, res) => {
+  // POST /cc/stepdown — relinquish the leader role. Drop a marker the supervisor reads on
+  // our exit so it drops to CLIENT (and does NOT re-elect itself to leader — the marker is
+  // what distinguishes an intentional stepdown from a crash). Then ack and exit.
+  app.post("/cc/stepdown", async (req, res) => {
     console.log("[CC] stepdown requested — exiting leader role");
+    try {
+      const { join } = await import("path");
+      const { writeFileSync } = await import("fs");
+      const { homedir } = await import("os");
+      const dir = process.env.CC_DATA_DIR || join(homedir(), ".cross-claude-mcp");
+      writeFileSync(join(dir, ".stepdown"), String(EPOCH));
+    } catch {}
     res.json({ ok: true, host: CC_HOST, epoch: EPOCH });
     setTimeout(() => process.exit(0), 250);
   });

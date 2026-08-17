@@ -67,7 +67,6 @@ function spawnLeader(epoch, port, token) {
 
 // wait until base answers /cc/whoami with predicate(w) true, or timeout
 async function waitFor(base, predicate, timeoutMs = 20000, everyMs = 400) {
-  const deadline = Date.now.call ? undefined : undefined; // (Date.now available in a real node proc)
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
     const w = await whoami(base, 1200);
@@ -89,8 +88,12 @@ async function cmdStart() {
   let stopBeacon = null;
   let steppingDown = false;
   let role = null;
+  let monitorIv = null;
+
+  const STEPDOWN_MARKER = join(DATA_DIR, '.stepdown');
 
   async function becomeLeader() {
+    try { rmSync(STEPDOWN_MARKER); } catch {}   // clear any stale marker before we lead
     const epoch = readEpoch() + 1;      // strictly higher than the last term this DB served
     writeEpoch(epoch);
     role = 'leader';
@@ -100,22 +103,32 @@ async function cmdStart() {
 
     child.on('exit', (code) => {
       if (stopBeacon) { stopBeacon(); stopBeacon = null; }
-      if (steppingDown) { log('stepped down (migration) → switching to CLIENT'); steppingDown = false; role = null; runClient(); return; }
+      if (monitorIv) { clearInterval(monitorIv); monitorIv = null; }
+      // An intentional stepdown (local flag OR the server's marker written by /cc/stepdown)
+      // means "become CLIENT" — NOT re-elect. Re-electing on stepdown was the migration flap:
+      // the old leader would re-take the term at an epoch TIE with the freshly-migrated host.
+      const wasStepdown = steppingDown || existsSync(STEPDOWN_MARKER);
+      try { if (existsSync(STEPDOWN_MARKER)) rmSync(STEPDOWN_MARKER); } catch {}
+      if (wasStepdown) { log('stepped down → switching to CLIENT'); steppingDown = false; role = null; runClient(); return; }
       log(`server exited (code ${code}) → re-electing in 1s`);
       role = null;
       setTimeout(electAndRun, 1000);
     });
 
-    // split-brain guard: after we bind, re-scan for a peer claiming >= our epoch
-    setTimeout(async () => {
-      if (role !== 'leader') return;
+    // Continuous leadership monitor: while we lead, keep scanning for a peer that OUTRANKS us
+    // (higher epoch, or equal epoch + lexicographically-lower host) and step down to it. A
+    // repeating check (not the old one-shot) so any tie/race self-corrects within seconds to
+    // the single deterministic winner.
+    monitorIv = setInterval(async () => {
+      if (role !== 'leader') { clearInterval(monitorIv); monitorIv = null; return; }
       const peer = await resolveFull({ token, skipLoopback: true, skipSelf: true });
       if (peer && (peer.epoch > epoch || (peer.epoch === epoch && String(peer.host).localeCompare(HOST) < 0))) {
-        log(`split-brain: peer ${peer.host} epoch ${peer.epoch} outranks me → stepping down to CLIENT`);
+        log(`peer ${peer.host} epoch ${peer.epoch} outranks me (I am ${HOST} epoch ${epoch}) → stepping down to CLIENT`);
+        clearInterval(monitorIv); monitorIv = null;
         steppingDown = true;
         try { await fetch(`http://127.0.0.1:${port}/cc/stepdown`, { method: 'POST', headers: { Authorization: 'Bearer ' + token } }); } catch { try { child.kill(); } catch {} }
       }
-    }, 1800);
+    }, 5000);
   }
 
   function runClient() {
@@ -205,14 +218,27 @@ async function cmdReceive(args) {
           writeFileSync(DB_FILE, buf);
           writeEpoch(newEpoch);
           res.setHeader('content-type', 'application/json');
+          res.setHeader('connection', 'close');   // no keep-alive → the bootstrap can free :8787 at once
           res.end(JSON.stringify({ ok: true, host: HOST, epoch: newEpoch, bytes: buf.length }));
           log(`imported ${buf.length} bytes → promoting to LEADER at epoch ${newEpoch}`);
-          // Hand off the port from the bootstrap listener to the full server.
-          srv.close(() => {
+
+          // Hand the port from the bootstrap listener to the full server. srv.close() only
+          // fires once every connection is gone, and the migrate client's keep-alive socket
+          // would otherwise hold it open — so force-drop lingering sockets first, THEN spawn
+          // the full server in the close callback (guaranteeing :8787 is actually free, no
+          // EADDRINUSE). A one-shot guard prevents a double-spawn.
+          let promoted = false;
+          const promote = () => {
+            if (promoted) return; promoted = true;
             const child = spawnLeader(newEpoch, port, token);
             const stop = startBeacon({ host: HOST, epoch: newEpoch, port, beaconPort: cfg.beaconPort });
             child.on('exit', (code) => { stop(); log(`server exited (code ${code})`); process.exit(code || 0); });
-          });
+          };
+          try { srv.closeAllConnections?.(); } catch {}
+          srv.close(promote);
+          // last-resort net in case the close callback never fires (should not happen once
+          // connections are force-dropped); long enough that the normal close path always wins.
+          setTimeout(promote, 8000);
         } catch (e) {
           res.statusCode = 500; res.end(JSON.stringify({ error: e.message }));
         }
@@ -273,7 +299,7 @@ async function cmdMigrate(args) {
 
   // 6. verify target promoted to leader@newEpoch BEFORE stepping the old one down
   log('verifying new leader…');
-  const promoted = await waitFor(targetBase, (w) => w.role === 'leader' && w.epoch === newEpoch, 25000);
+  const promoted = await waitFor(targetBase, (w) => w.role === 'leader' && w.epoch === newEpoch, 60000);
   if (!promoted) { console.error('abort: target did not promote to leader in time — OLD LEADER LEFT RUNNING (safe). Investigate before retrying.'); process.exit(1); }
   log(`✅ new leader live: ${promoted.host} epoch=${promoted.epoch} @ ${targetBase}`);
 
