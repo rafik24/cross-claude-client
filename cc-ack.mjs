@@ -16,9 +16,7 @@
 // Emits:  #<channel>  [response]  "ACK — <note> · taken into lane <your_id>"
 // Follow up with a `done` (cc-send --type done) when the work actually lands.
 // ---------------------------------------------------------------------------
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { resolveFast, loadConfig } from './cc-discover.mjs';
 
 const a = process.argv.slice(2);
 const sender = a[0], toArg = a[1];
@@ -27,15 +25,11 @@ if (!sender || !toArg || !note) {
   console.error('usage: cc-ack.mjs <your_id> <channel|all> "<what you are taking on>"');
   process.exit(2);
 }
-function busCfg() {
-  const p = process.env.CC_BUS_CONFIG || join(homedir(), '.claude', '.cross-claude-bus');
-  const out = {};
-  try { for (const l of readFileSync(p, 'utf8').split(/\r?\n/)) { const m = l.match(/^\s*(?:export\s+)?(CC_[A-Z_]+)\s*=\s*(.*?)\s*$/); if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, ''); } } catch {}
-  return out;
-}
-const CFG = busCfg();
-const BASE = (process.env.CC_BASE || CFG.CC_BASE || 'http://100.122.172.29:8787').replace(/\/$/, '');
-const TOKEN = process.env.CC_TOKEN || CFG.CC_TOKEN || '';
+const cfg = loadConfig();
+const TOKEN = process.env.CC_TOKEN || cfg.token;
+const leader = await resolveFast({ pin: process.env.CC_BASE || cfg.pin, token: TOKEN });
+if (!leader) { console.error('ack failed: no bus leader found (loopback / LAN / tailnet all silent)'); process.exit(1); }
+const BASE = leader.base;
 const channel = toArg === 'all' ? 'general' : toArg;
 const content = `ACK — ${note} · taken into lane ${sender}`;
 

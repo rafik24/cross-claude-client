@@ -23,9 +23,10 @@
 // flooded) but DOES show the messages of any channel created after startup —
 // including a DM channel someone opens to you. Pass --from-start to replay all.
 // ---------------------------------------------------------------------------
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { resolveFast, resolveFull, loadConfig } from './cc-discover.mjs';
 
 const args = process.argv.slice(2);
 const instance = args[0];
@@ -35,17 +36,20 @@ if (!instance || instance.startsWith('--')) {
 }
 const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d; };
 const ALL = args.includes('--all');   // firehose: emit EVERY message (ambient included)
-// Config fallback: ~/.claude/.cross-claude-bus (shell-style: CC_BASE=… / CC_TOKEN=…) so the
-// Monitor command can be just `node cc-poll.mjs <id>` with no secret on the command line.
-function busCfg() {
-  const p = process.env.CC_BUS_CONFIG || join(homedir(), '.claude', '.cross-claude-bus');
-  const out = {};
-  try { for (const l of readFileSync(p, 'utf8').split(/\r?\n/)) { const m = l.match(/^\s*(?:export\s+)?(CC_[A-Z_]+)\s*=\s*(.*?)\s*$/); if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, ''); } } catch {}
-  return out;
+// Config: ~/.claude/.cross-claude-bus (CC_TOKEN + optional CC_BASE pin). The leader address is
+// DISCOVERED (loopback/LAN/tailnet), so the Monitor command is just `node cc-poll.mjs <id>` with
+// no IP and no secret on the command line.
+const cfg = loadConfig();
+const PIN = opt('--base', process.env.CC_BASE) || cfg.pin;
+const TOKEN = opt('--token', process.env.CC_TOKEN) || cfg.token;
+// BASE is mutable: a live listener RE-RESOLVES when its leader goes dead (e.g. after a migration),
+// so this Monitor keeps receiving on the new host instead of going deaf.
+let BASE = null;
+async function ensureBase(full = false) {
+  const leader = full ? await resolveFull({ pin: PIN, token: TOKEN }) : await resolveFast({ pin: PIN, token: TOKEN });
+  if (leader && leader.base !== BASE) { BASE = leader.base; console.log(`[bus leader → ${leader.host} epoch=${leader.epoch} @ ${BASE}]`); }
+  return BASE;
 }
-const CFG = busCfg();
-const BASE = (opt('--base', process.env.CC_BASE || CFG.CC_BASE || 'http://100.122.172.29:8787')).replace(/\/$/, '');
-const TOKEN = opt('--token', process.env.CC_TOKEN || CFG.CC_TOKEN || '');
 const ONLY = opt('--channel', null);
 const fromStart = args.includes('--from-start');
 // Firehose (emit ambient too) when explicitly asked (--all) or when scoped to ONE channel
@@ -74,9 +78,10 @@ async function register() {
 }
 
 async function tick(seed = false) {
+  if (!BASE) { await ensureBase(true); if (!BASE) return; }
   let channels;
   try { channels = ONLY ? [{ name: ONLY }] : (await j('/api/channels')).channels; }
-  catch { return; }
+  catch { await ensureBase(true); return; }   // leader dead (e.g. migrated) → re-discover, pick up new host next tick
   for (const c of channels) {
     const first = cursors[c.name] === undefined;
     const after = cursors[c.name] ?? 0;
@@ -110,9 +115,10 @@ async function tick(seed = false) {
 }
 
 (async () => {
+  await ensureBase(true);                             // full discovery scan at startup (no IP configured)
   await register();
   await tick(true);                                   // seed cursors (skips backlog unless --from-start)
-  console.log(`[listening as ${instance} on ${ONLY ? '#' + ONLY : 'all channels'} @ ${BASE}]`);
+  console.log(`[listening as ${instance} on ${ONLY ? '#' + ONLY : 'all channels'} @ ${BASE || 'discovering…'}]`);
   setInterval(register, 20000);                       // heartbeat presence
   setInterval(() => tick(false).catch(() => {}), 2000);
 })();

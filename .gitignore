@@ -6,7 +6,8 @@ node_modules/
 # NOT in this repo. Guard against it ever being copied in.
 .cross-claude-bus
 
-# Mothballed hand-rolled broker (superseded by the cross-claude-mcp server) — do not track here.
-connect.mjs
-server.mjs
-index.html
+# Mothballed hand-rolled broker (superseded by the vendored server/) — do not track here.
+# Anchored to the repo ROOT (leading /) so they do NOT match the vendored server/server.mjs etc.
+/connect.mjs
+/server.mjs
+/index.html

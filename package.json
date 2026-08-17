@@ -1,0 +1,25 @@
+{
+  "name": "cross-claude-client",
+  "version": "3.0.0",
+  "description": "Cross-Claude bus: self-hosting client + vendored server + zero-config discovery, single-server election, and PO-commanded migration. One clone on any node can either host the bus or connect to whoever is hosting.",
+  "type": "module",
+  "bin": {
+    "cc-bus": "./cc-bus.mjs"
+  },
+  "scripts": {
+    "bus": "node cc-bus.mjs start",
+    "status": "node cc-bus.mjs status",
+    "server": "node server/server.mjs",
+    "test": "node test/discovery.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "better-sqlite3": "^12.2.0",
+    "express": "^5.1.0",
+    "zod": "^3.24.1"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

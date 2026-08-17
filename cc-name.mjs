@@ -20,10 +20,11 @@
 // Monitor under the old id, STOP it first — the beacon must be written under the
 // SAME id the gate now reads, or edits stay blocked.
 // ---------------------------------------------------------------------------
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveFast, loadConfig } from './cc-discover.mjs';
 
 const a = process.argv.slice(2);
 const sid = a[0];
@@ -33,15 +34,12 @@ if (!sid || sid.startsWith('--') || !title) {
   process.exit(2);
 }
 
-function busCfg() {
-  const p = process.env.CC_BUS_CONFIG || join(homedir(), '.claude', '.cross-claude-bus');
-  const out = {};
-  try { for (const l of readFileSync(p, 'utf8').split(/\r?\n/)) { const m = l.match(/^\s*(?:export\s+)?(CC_[A-Z_]+)\s*=\s*(.*?)\s*$/); if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, ''); } } catch {}
-  return out;
-}
-const CFG = busCfg();
-const BASE = (process.env.CC_BASE || CFG.CC_BASE || 'http://100.122.172.29:8787').replace(/\/$/, '');
-const TOKEN = process.env.CC_TOKEN || CFG.CC_TOKEN || '';
+const cfg = loadConfig();
+const TOKEN = process.env.CC_TOKEN || cfg.token;
+// register is fail-soft, so a missed leader just skips the bus upsert (the local .id map,
+// step 1, still happens). Discovery finds the leader with no IP configured.
+const leader = await resolveFast({ pin: process.env.CC_BASE || cfg.pin, token: TOKEN });
+const BASE = leader ? leader.base : null;
 
 // slug: lowercase, non-[a-z0-9._-] -> '-', collapse, trim, cap 48. Matches cc-join.sh's charset.
 const slug = (s) => (s.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48).replace(/-+$/, '')) || 'misc';
