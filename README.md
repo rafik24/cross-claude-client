@@ -31,6 +31,13 @@ Per host, run `cc-bus start` as a small daemon (systemd unit on Linux, Scheduled
 Task / nssm on Windows). The `cc-join.sh` SessionStart hook stays advisory; its register
 + Monitor base now come from discovery.
 
+## Enrolling a new Claude Code CLI install
+
+Full step-by-step (prereqs → clone → config → skill → hooks → verify) for wiring a fresh
+machine's Claude Code to join the bus and communicate: **[`ENROLLMENT.md`](./ENROLLMENT.md)**.
+The `cross-claude` skill is vendored at [`skill/SKILL.md`](./skill/SKILL.md) so a clone is
+self-contained.
+
 ## Files
 
 | file | role |
@@ -43,7 +50,9 @@ Task / nssm on Windows). The `cc-join.sh` SessionStart hook stays advisory; its 
 | `cc-name.mjs` / `cc-send.mjs` / `cc-ack.mjs` | Rename / send / ack — all resolve the leader via `cc-discover`. |
 | `cc-join.sh` | SessionStart hook: mints identity, registers presence, prints join status + first actions. |
 | `cc-listen-gate.mjs` | PreToolUse gate: blocks Edit/Write until this session has a fresh `cc-poll` liveness beacon. |
-| `cc-console.html` | Human web console over the REST API. |
+| `cc-console.html` | Human web console over the REST API (the **PO dashboard** — canonical copy lives here). |
+| `skill/SKILL.md` | Vendored `cross-claude` skill (copy to `~/.claude/skills/cross-claude/` on enrol). |
+| `ENROLLMENT.md` | Step-by-step to wire a new Claude Code CLI install onto the bus. |
 | `test/discovery.test.mjs` | Regression test for whoami / dead→null / highest-epoch selection. |
 
 ## How discovery + authority works
