@@ -1,14 +1,15 @@
 // Discovery regression test — no external test framework, just node:assert.
 //   node test/discovery.test.mjs
 // Boots two vendored servers at different epochs and asserts discovery selects the
-// HIGHEST epoch, and that a dead base probes to null.
+// HIGHEST epoch, that a dead base probes to null, and that resolveFast is epoch-aware
+// (a warm cache pointing at a higher epoch beats a lower-epoch pin — the zombie-leader fix).
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { whoami, resolveFull } from '../cc-discover.mjs';
+import { whoami, resolveFull, resolveFast, cacheLeader } from '../cc-discover.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(__dirname, '..', 'server', 'server.mjs');
@@ -22,11 +23,25 @@ function boot(port, epoch, host) {
   });
 }
 
+// Poll until a base answers /cc/whoami, or give up. The vendored server has a heavy
+// MCP-SDK import chain and can take ~10s to bind on some hosts, so a fixed sleep is flaky.
+async function waitUp(base, timeoutMs = 30000) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const w = await whoami(base, 1500);
+    if (w) return w;
+    await sleep(500);
+  }
+  return null;
+}
+
 const a = boot(8792, 3, 'lowEpoch');
 const b = boot(8793, 9, 'highEpoch');
 let failed = false;
 try {
-  await sleep(2500);
+  // Wait for both servers to actually bind (not a fixed sleep).
+  assert.ok(await waitUp('http://127.0.0.1:8792'), 'server A came up');
+  assert.ok(await waitUp('http://127.0.0.1:8793'), 'server B came up');
 
   // whoami hits each
   assert.equal((await whoami('http://127.0.0.1:8792')).epoch, 3, 'server A epoch');
@@ -44,7 +59,16 @@ try {
   assert.equal(leader.epoch, 9, 'highest epoch wins');
   assert.equal(leader.host, 'highEpoch', 'winner is the high-epoch host');
 
-  console.log('✅ discovery.test: all assertions passed (whoami, dead→null, highest-epoch selection)');
+  // resolveFast must be EPOCH-AWARE (regression for the zombie-leader fix): given a
+  // low-epoch pin AND a warm cache pointing at the higher-epoch server, it must pick the
+  // higher epoch — not the first (pin) responder. Prime the cache to the epoch-9 server,
+  // pin the epoch-3 server, and assert 9 wins.
+  cacheLeader({ base: 'http://127.0.0.1:8793', host: 'highEpoch', epoch: 9 });
+  const fast = await resolveFast({ pin: 'http://127.0.0.1:8792' });
+  assert.ok(fast, 'resolveFast found a leader');
+  assert.equal(fast.epoch, 9, 'resolveFast picks the HIGHEST epoch (cache 9 > pin 3), not the first responder');
+
+  console.log('✅ discovery.test: all assertions passed (whoami, dead→null, resolveFull highest-epoch, resolveFast epoch-aware)');
 } catch (e) {
   failed = true;
   console.error('❌ discovery.test FAILED:', e.message);

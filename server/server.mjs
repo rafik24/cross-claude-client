@@ -20,6 +20,7 @@ import { createDB } from "./db.mjs";
 import { registerTools } from "./tools.mjs";
 import { createRestRouter } from "./rest-api.mjs";
 import { InviteCodeOAuthProvider, createAuthorizeSubmitHandler } from "./auth.mjs";
+import { resolveFull } from "../cc-discover.mjs";
 
 // --- Transport: Stdio (local) ---
 
@@ -444,6 +445,37 @@ li{margin:4px 0}</style></head>
 
   for (const signal of ["SIGTERM", "SIGINT"]) {
     process.on(signal, shutdown);
+  }
+
+  // --- Server-side self-demotion (zombie-leader guard) ---
+  // A leader that discovers a STRICTLY higher-ranked peer for this bus steps itself down —
+  // regardless of how it was born (`cc-bus start` election OR `cc-bus receive`/migrate promote)
+  // and even if its supervisor died. Without this, a migrate-promoted leader that is later
+  // superseded by a failover keeps serving a stale, forked DB as an invisible "zombie" (the
+  // 2026-08 incident). It writes the same `.stepdown` marker POST /cc/stepdown uses, so the
+  // supervisor drops to CLIENT rather than re-electing. FAIL-SAFE: only demote when a real
+  // outranking peer is observed; a discovery miss or error NEVER demotes. EPOCH===0 means a
+  // standalone/dev server not under the supervisor — it takes no part in the election.
+  if (EPOCH > 0) {
+    const { join } = await import("path");
+    const { writeFileSync } = await import("fs");
+    const { homedir } = await import("os");
+    const dataDir = process.env.CC_DATA_DIR || join(homedir(), ".cross-claude-mcp");
+    let demoting = false;
+    const SELF_DEMOTE_MS = 15000;
+    const selfDemoteIv = setInterval(async () => {
+      if (demoting) return;
+      let peer = null;
+      try { peer = await resolveFull({ token: process.env.MCP_API_KEY, skipLoopback: true, skipSelf: true }); } catch { return; }
+      if (!peer) return;
+      const outranked = peer.epoch > EPOCH || (peer.epoch === EPOCH && String(peer.host).localeCompare(CC_HOST) < 0);
+      if (!outranked) return;
+      demoting = true;
+      console.log(`[CC] outranked by ${peer.host} epoch ${peer.epoch} (I am ${CC_HOST} epoch ${EPOCH}) → self-demoting`);
+      try { writeFileSync(join(dataDir, ".stepdown"), String(EPOCH)); } catch {}
+      setTimeout(() => process.exit(0), 250);
+    }, SELF_DEMOTE_MS);
+    selfDemoteIv.unref?.();   // don't keep the process alive just for this timer
   }
 
   app.listen(PORT, "0.0.0.0", () => {
