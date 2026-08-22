@@ -21,7 +21,7 @@
 // ---------------------------------------------------------------------------
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,6 +74,28 @@ async function waitFor(base, predicate, timeoutMs = 20000, everyMs = 400) {
     await new Promise((r) => setTimeout(r, everyMs));
   }
   return null;
+}
+
+// --- DB replication (Finding 3): a client pulls the leader's DB snapshot so an automatic
+// failover promotes THIS node on a RECENT copy — bounding message loss to the replication
+// interval instead of the unbounded loss of promoting on a stale/empty local DB. Also carries
+// the leader's epoch so the failover-promote is authoritative (epoch+1 > the leader's). A
+// client runs no server, so DB_FILE is not open here; we clear stale WAL/SHM and swap the fresh
+// image in atomically. Best-effort: any failure returns false and never disturbs the client.
+async function replicateSnapshot(leader, token) {
+  try {
+    const r = await fetch(leader.base + '/cc/export', { headers: { Authorization: 'Bearer ' + token } });
+    if (!r.ok) return false;
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!buf.length) return false;
+    mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = DB_FILE + '.repl';
+    writeFileSync(tmp, buf);
+    for (const suf of ['-wal', '-shm']) { try { rmSync(DB_FILE + suf); } catch {} }
+    renameSync(tmp, DB_FILE);   // replaces the target on both POSIX and Windows
+    if (typeof leader.epoch === 'number') writeEpoch(leader.epoch);
+    return true;
+  } catch { return false; }
 }
 
 // ===========================================================================
@@ -131,23 +153,32 @@ async function cmdStart() {
     }, 5000);
   }
 
-  function runClient() {
+  async function runClient() {
     role = 'client';
-    log('CLIENT mode — a bus is already present; not starting a server. Watching for failover.');
-    // Periodic failover check: if the leader vanishes, take over.
+    const REPLICATE_MS = parseInt(process.env.CC_REPLICATE_MS) || 30000;
+    log(`CLIENT mode — a bus is present; not starting a server. Watching for failover + replicating the DB every ${Math.round(REPLICATE_MS / 1000)}s.`);
+    let lastReplicate = 0;      // when we last ATTEMPTED a pull (throttle)
+    let lastReplicateOk = 0;    // when we last SUCCEEDED (snapshot recency)
+    // Immediate first snapshot so a just-joined client can already fail over safely.
+    { const l0 = await resolveFull({ token }); if (l0 && await replicateSnapshot(l0, token)) { lastReplicate = Date.now(); lastReplicateOk = Date.now(); } }
+    // Periodic failover check + replication.
     const iv = setInterval(async () => {
       if (role !== 'client') { clearInterval(iv); return; }
       const leader = await resolveFull({ token });
       if (!leader) {
         clearInterval(iv);
-        // ⚠️ Finding 3 (not yet fixed): auto-failover promotes THIS node on its own local
-        // messages.db. A pure client never syncs the leader's DB, so any messages written to
-        // the vanished leader since this node last held/synced the DB are ABSENT — and per-DB
-        // AUTOINCREMENT ids will fork. Surfaced loudly rather than lost silently; the durable
-        // fix (snapshot replication or global message ids) needs multi-node QA.
-        log('leader vanished → re-electing. ⚠️ auto-failover promotes on this node\'s LOCAL DB — messages sent to the vanished leader since this node last synced are NOT present (no replication yet).');
+        // Finding 3: auto-failover now promotes on the most recent replicated snapshot, so
+        // loss is BOUNDED to the replication interval (not the unbounded stale-DB loss).
+        const age = lastReplicateOk ? `~${Math.round((Date.now() - lastReplicateOk) / 1000)}s old` : 'NONE pulled — local DB may be stale/empty';
+        log(`leader vanished → re-electing on the last replicated snapshot (${age}); Finding-3 loss bounded to the ${Math.round(REPLICATE_MS / 1000)}s replication interval.`);
         electAndRun();
-      } else cacheLeader(leader);
+        return;
+      }
+      cacheLeader(leader);
+      if (Date.now() - lastReplicate >= REPLICATE_MS) {
+        lastReplicate = Date.now();   // stamp before the await so ticks don't stack pulls
+        if (await replicateSnapshot(leader, token)) lastReplicateOk = Date.now();
+      }
     }, 15000);
   }
 

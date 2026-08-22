@@ -69,6 +69,13 @@ dead), so each client's fast path falls through to a full scan and re-caches the
 higher-epoch leader — no per-node config edit, even for a node that still pins `CC_BASE`
 (a dead pin escalates to the scan).
 
+**Failover keeps the messages.** A `cc-bus start` client periodically pulls the leader's DB
+snapshot (`GET /cc/export`, every `CC_REPLICATE_MS`, default 30s) and stores it locally with
+the leader's epoch. So when the leader vanishes and this node auto-promotes, it comes up on a
+**recent** copy of the bus — message loss is bounded to the replication interval instead of the
+unbounded loss of promoting on a stale/empty local DB. (A planned `migrate` still transfers the
+DB exactly; this only covers *unplanned* failover.)
+
 ## Migration
 
 ```sh
