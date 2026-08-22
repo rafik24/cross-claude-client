@@ -75,6 +75,49 @@ The bus only allows six message types (`message · request · response · status
 a `response` whose body starts `ACK` — `cc-ack` does this for you. When the work actually lands, send a `done`
 (`cc-send … --type done`) — a `response`/`ack` is NOT a `done`; without the `done` a peer waits forever.
 
+## Dispatch & affinity routing — who takes the work
+Three duplicate implementations landed in ONE day because a bus ack is not a lock and first-to-answer is
+not best-placed. Two rules fix it: **route by domain competence, and hold a real lock on the SoT — not the
+bus.** The lane already living in an area (repo cloned, worktree open, prior knowledge) does it faster and
+better than whoever happened to shout first.
+
+**Domains.** Tag work by the ONE area the main change lands in (name any second area for a relay). Coarse on
+purpose — if the tags were fine-grained nothing would match cleanly, so most issues map to a single primary:
+
+| tag | covers | repo · paths |
+|---|---|---|
+| `client` | the desktop app — declare which half: *engine* (`core/ api/ providers/` — scan, classify, delete, licence-client, persistence, runtime) or *fe* (`frontend-next/src`) | `rafik24/mailroom` |
+| `licensing-backend` | Keygen / Stripe / trial / fraud server logic, DB migrations, VPS deploy | `rafik24/mailroom-licensing` (VPS) |
+| `admin-dashboard` | the licensing ops console — fraud origins, shared-cards, geo review/release | licensing dashboard |
+| `website` | mailroomclean.com marketing / FAQ / help centre **and the live update feed** (`updates.json` — the 5th version pin + the Rule 9 kill-switch) | `mailroom-site` |
+| `release` | build / packaging / signing (Azure Artifact Signing), anti-tamper, AV-FP handling, publishing the feed | `mailroom` `build/ deploy/` + the release repo |
+| `docs` | owning-doc currency (Rule 14) + the cross-repo `DOCS_INDEX` authority | `mailroom/docs` |
+| `infra` | the bus (`cross-claude-client`), `mailroom-claude-tools`, CI / gates / hooks, dev stands | tooling repos |
+| `gtm` | positioning / PRD / funnel copy — **PO-owned, rarely a session claim** | `mailroom-gtm` |
+
+**The handshake** — when work needs an owner (a PO ask, or a lane surfacing a new issue):
+1. **Dispatch, don't open-call.** `DISPATCH #N [<domain>] — <one line>`. The PO does this too: dispatch to a
+   domain, never `@all "can someone take X"` — the open call is what spawns the races.
+2. **Affinity window (~2 min): declare, don't grab.** Lanes with standing reply `AFFINITY #N HIGH|LOW —
+   <evidence>`; a lane with no business in that domain stays silent. Affinity is self-assessed from real
+   signals: a **live worktree** in the repo/paths, your **session name's** domain, loaded context / prior
+   issues in the area — not a wish to help.
+3. **Deterministic pick.** Highest affinity wins; tie → lowest session shortid yields. The winner posts
+   `CLAIMING #N`; everyone else stands down. No response, or genuinely urgent → skip the window, go to the lock.
+4. **Take the lock — on the SoT, not the bus.** `gh issue edit N --add-assignee @me --add-label in-progress`.
+   A bus ack coordinates; the GitHub **assignee reserves**. This is the backstop that keeps the survivor
+   unique even when the handshake itself races.
+5. **Cross-domain → split + relay, never reach across blind.** File the sub-issue in YOUR domain (where you
+   have context) and hand the other domain's part to its lane as an ACK-required `handoff`. E.g. a `client`
+   lane that traced a VPS ban files the client fix itself and relays the server change to the
+   `licensing-backend` lane — it does not edit a backend it doesn't know.
+
+**Before you claim ANYTHING — even fresh off a handover.** A handed-over session starts blind to who owns
+what, which is how handovers still collided. So first read the roster (`ListAgents` + the console) AND the
+SoT (`gh issue view N`, `gh pr list --search N`). **Already assigned, `in-progress`, or carrying an open
+PR? → STOP and DM the owner** — don't re-implement what a lane already holds. Check again right before you
+open your own PR: the branch/PR is the last-chance dedup.
+
 ## Sending
 ```
 node <live>/cc-send.mjs <your-id> <channel|all> 'message' --type <type>
