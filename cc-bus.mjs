@@ -138,8 +138,16 @@ async function cmdStart() {
     const iv = setInterval(async () => {
       if (role !== 'client') { clearInterval(iv); return; }
       const leader = await resolveFull({ token });
-      if (!leader) { clearInterval(iv); log('leader vanished → re-electing'); electAndRun(); }
-      else cacheLeader(leader);
+      if (!leader) {
+        clearInterval(iv);
+        // ⚠️ Finding 3 (not yet fixed): auto-failover promotes THIS node on its own local
+        // messages.db. A pure client never syncs the leader's DB, so any messages written to
+        // the vanished leader since this node last held/synced the DB are ABSENT — and per-DB
+        // AUTOINCREMENT ids will fork. Surfaced loudly rather than lost silently; the durable
+        // fix (snapshot replication or global message ids) needs multi-node QA.
+        log('leader vanished → re-electing. ⚠️ auto-failover promotes on this node\'s LOCAL DB — messages sent to the vanished leader since this node last synced are NOT present (no replication yet).');
+        electAndRun();
+      } else cacheLeader(leader);
     }, 15000);
   }
 
@@ -232,7 +240,19 @@ async function cmdReceive(args) {
             if (promoted) return; promoted = true;
             const child = spawnLeader(newEpoch, port, token);
             const stop = startBeacon({ host: HOST, epoch: newEpoch, port, beaconPort: cfg.beaconPort });
-            child.on('exit', (code) => { stop(); log(`server exited (code ${code})`); process.exit(code || 0); });
+            child.on('exit', (code) => {
+              stop();
+              // A migrate-promoted leader must NOT just die on its server's exit — that left the
+              // 2026-08 "zombie"/no-failover gap (review Findings 1 & 5). Re-join via `cc-bus start`
+              // so the node re-elects (leader if truly alone) or drops to CLIENT (if the server
+              // self-demoted to a higher-epoch peer — the .stepdown marker path). This gives a
+              // migrate-born leader the same resilience as a `start`-elected one.
+              log(`server exited (code ${code}) — re-joining the bus via 'cc-bus start'`);
+              try {
+                spawn(process.execPath, [fileURLToPath(import.meta.url), 'start'], { detached: true, stdio: 'ignore' }).unref();
+              } catch {}
+              process.exit(code || 0);
+            });
           };
           try { srv.closeAllConnections?.(); } catch {}
           srv.close(promote);

@@ -151,7 +151,7 @@ function tailscalePeers() {
   });
 }
 
-// --- fast path: pin → cache → loopback (first live responder). Hot client path. ---
+// --- fast path: pin → cache → loopback, HIGHEST epoch among live responders. Hot client path. ---
 export async function resolveFast(opts = {}) {
   const cfg = loadConfig();
   const pin = opts.pin ?? cfg.pin;
@@ -161,10 +161,13 @@ export async function resolveFast(opts = {}) {
   const cached = readCache();
   if (cached?.base) tryBases.push(cached.base);
   tryBases.push(`http://127.0.0.1:${port}`);
-  for (const base of tryBases) {
-    const w = await whoami(base, opts.timeoutMs || 1200);
-    if (w) { cacheLeader(w); return w; }
-  }
+  // Probe ALL candidates (≤3) and pick the HIGHEST epoch — NOT the first responder. A
+  // stale/demoted loopback or a warm cache entry must never win over a live higher-epoch
+  // leader (that bug let a superseded loopback "zombie" leader keep co-located clients
+  // bound to it forever). pickAuthoritative applies the epoch>tiebreak ordering.
+  const responders = await Promise.all(tryBases.map((b) => whoami(b, opts.timeoutMs || 1200)));
+  const best = pickAuthoritative(responders);
+  if (best) { cacheLeader(best); return best; }
   // Fast path missed → escalate to a full scan (also follows a migration).
   return resolveFull({ ...opts, pin });
 }
