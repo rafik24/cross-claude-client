@@ -35,6 +35,16 @@ async function waitUp(base, timeoutMs = 30000) {
   return null;
 }
 
+// Keep discovery HERMETIC from the real estate: point the config at a nonexistent file (so no
+// real CC_BASE pin / token leaks in) and the leader cache at a scratch dir. Otherwise the live
+// estate leader (reachable via the real pin/cache) outranks the epoch-9 test server and the
+// "highest epoch wins" assertion flakes depending on whether the estate is up.
+process.env.CC_BUS_CONFIG = join(tmpdir(), `cc-no-config-${process.pid}`);
+process.env.CC_CACHE_DIR = mkdtempSync(join(tmpdir(), 'cccache-'));
+// Also isolate the LAN beacon port — otherwise this test's UDP solicit on the default 8788
+// hits the real estate leader's beacon and its epoch leaks into the scan.
+process.env.CC_BEACON_PORT = '8899';
+
 const a = boot(8792, 3, 'lowEpoch');
 const b = boot(8793, 9, 'highEpoch');
 let failed = false;

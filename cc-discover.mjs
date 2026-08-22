@@ -24,8 +24,11 @@ import { execFile } from 'node:child_process';
 export const DEFAULT_PORT = 8787;
 export const DEFAULT_BEACON_PORT = 8788;
 
-const CACHE_DIR = join(homedir(), '.claude', '.cc-listen');
-const CACHE_FILE = join(CACHE_DIR, 'leader.json');
+// Cache location is resolved LAZILY (not at import) and honours CC_CACHE_DIR — so a test
+// (or an isolated node) can point the leader cache at a scratch dir instead of the shared
+// ~/.claude/.cc-listen, keeping discovery hermetic from the real estate.
+function cacheDir() { return process.env.CC_CACHE_DIR || join(homedir(), '.claude', '.cc-listen'); }
+function cacheFile() { return join(cacheDir(), 'leader.json'); }
 
 // --- config (shell-style ~/.claude/.cross-claude-bus) ---
 export function loadConfig() {
@@ -49,12 +52,12 @@ export function loadConfig() {
 
 // --- cache ---
 export function readCache() {
-  try { return JSON.parse(readFileSync(CACHE_FILE, 'utf8')); } catch { return null; }
+  try { return JSON.parse(readFileSync(cacheFile(), 'utf8')); } catch { return null; }
 }
 export function cacheLeader(leader) {
   try {
-    mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(CACHE_FILE, JSON.stringify({ ...leader, ts: Date.now() }));
+    mkdirSync(cacheDir(), { recursive: true });
+    writeFileSync(cacheFile(), JSON.stringify({ ...leader, ts: Date.now() }));
   } catch {}
 }
 
