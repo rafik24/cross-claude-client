@@ -25,6 +25,7 @@ import { homedir, hostname } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveFast, loadConfig } from './cc-discover.mjs';
+import { revString } from './cc-rev.mjs';
 
 const a = process.argv.slice(2);
 const sid = a[0];
@@ -55,7 +56,7 @@ try {
   await fetch(BASE + '/api/register', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + TOKEN, 'content-type': 'application/json' },
-    body: JSON.stringify({ instance_id: id, description: title.slice(0, 120) }),
+    body: JSON.stringify({ instance_id: id, description: title.slice(0, 120), rev: revString() }),
   });
 } catch {}
 

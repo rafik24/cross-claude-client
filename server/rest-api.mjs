@@ -30,9 +30,9 @@ export function createRestRouter(db) {
 
   router.post("/register", async (req, res, next) => {
     try {
-      const { instance_id, description } = req.body;
+      const { instance_id, description, rev } = req.body;
       if (!instance_id) return res.status(400).json({ error: "instance_id is required" });
-      await db.registerInstance(instance_id, description || null, null);
+      await db.registerInstance(instance_id, description || null, null, rev || null);
       res.json({ ok: true, instance_id });
     } catch (e) { next(e); }
   });

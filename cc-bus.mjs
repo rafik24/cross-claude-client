@@ -30,6 +30,7 @@ import {
   loadConfig, resolveFull, whoami, cacheLeader, DEFAULT_PORT,
 } from './cc-discover.mjs';
 import { startBeacon } from './cc-beacon.mjs';
+import { revString } from './cc-rev.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = join(__dirname, 'server', 'server.mjs');
@@ -211,7 +212,13 @@ async function cmdStatus() {
   const cfg = loadConfig();
   const leader = await resolveFull({ token: cfg.token });
   if (leader) {
-    console.log(`LEADER: ${leader.host}  epoch=${leader.epoch}  base=${leader.base}`);
+    const mine = revString();
+    const leaderRev = leader.rev || 'unknown';
+    console.log(`LEADER: ${leader.host}  epoch=${leader.epoch}  base=${leader.base}  rev=${leaderRev}`);
+    console.log(`THIS NODE: ${hostname()}  rev=${mine}`);
+    if (leader.rev && mine !== 'unknown' && mine !== leader.rev) {
+      console.log(`⚠️  CODE DRIFT — this checkout (${mine}) differs from the leader (${leader.rev}). git pull && restart the bus to sync.`);
+    }
   } else {
     console.log('no bus leader found (loopback / LAN / tailnet all silent)');
     process.exitCode = 1;

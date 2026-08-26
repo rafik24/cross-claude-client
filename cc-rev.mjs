@@ -1,0 +1,37 @@
+// ---------------------------------------------------------------------------
+// cc-rev.mjs — identify the running code revision of THIS checkout.
+//
+// The estate deploys by `git pull`, so a node can silently run stale code (the
+// 2026-08 incident: a leader without the /console route kept serving an old
+// build with no signal it was behind). Every process that participates in the
+// bus advertises its short commit SHA (+ a `+` when the worktree is dirty) so
+// the estate can VERIFY everyone is on the same code and nudge stale nodes to
+// pull + re-arm/re-launch.
+//
+//   codeRev()   → { rev: 'abc1234'|null, dirty: bool }   (memoised; git run once)
+//   revString() → 'abc1234' | 'abc1234+' | 'unknown'
+//
+// Fail-soft: no git / not a checkout → { rev: null }, never throws.
+// ---------------------------------------------------------------------------
+import { execFileSync } from 'node:child_process';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO = dirname(fileURLToPath(import.meta.url));   // this file lives at the repo root
+let cached = null;
+
+export function codeRev() {
+  if (cached) return cached;
+  try {
+    const rev = execFileSync('git', ['-C', REPO, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', timeout: 2500 }).trim();
+    let dirty = false;
+    try { dirty = execFileSync('git', ['-C', REPO, 'status', '--porcelain'], { encoding: 'utf8', timeout: 2500 }).trim().length > 0; } catch {}
+    cached = { rev: rev || null, dirty };
+  } catch { cached = { rev: null, dirty: false }; }
+  return cached;
+}
+
+export function revString() {
+  const { rev, dirty } = codeRev();
+  return rev ? rev + (dirty ? '+' : '') : 'unknown';
+}

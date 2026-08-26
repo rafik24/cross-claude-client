@@ -72,8 +72,8 @@ export async function whoami(base, timeoutMs = 1500) {
     const j = await r.json();
     if (typeof j.epoch !== 'number') return null;
     // Canonical base = the address WE dialed (guaranteed reachable from here), not what the
-    // server guesses. host/epoch come from the server.
-    return { base, host: j.host, epoch: j.epoch, role: j.role || 'leader' };
+    // server guesses. host/epoch/rev come from the server.
+    return { base, host: j.host, epoch: j.epoch, role: j.role || 'leader', rev: j.rev || null, dirty: !!j.dirty };
   } catch { return null; }
   finally { clearTimeout(t); }
 }

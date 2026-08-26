@@ -40,6 +40,7 @@
   .who .pip{width:8px;height:8px;border-radius:50%;background:var(--online);flex:none} .who.offline .pip{background:var(--dim)}
   .who.offline{opacity:.5} .who .id{font-family:var(--mono);font-size:12px;font-weight:600;word-break:break-all}
   .who .desc{font-size:11px;color:var(--dim);margin-top:3px;line-height:1.35}
+  .who .stale{font-size:9px;text-transform:uppercase;letter-spacing:.4px;padding:1px 5px;border-radius:4px;background:rgba(240,136,62,.18);color:var(--warn);margin-left:auto;flex:none;font-family:var(--mono)}
   .chan{padding:6px 9px;border-radius:7px;margin-bottom:3px;cursor:pointer;font-family:var(--mono);font-size:12px;display:flex;gap:6px;align-items:center}
   .chan:hover{background:var(--panel2)} .chan.sel{background:var(--panel2);outline:1px solid var(--accent)}
   .chan.offwin{opacity:.45} .chan .n{flex:1} .chan .c{color:var(--dim);font-size:11px}
@@ -143,6 +144,7 @@
   let viewedAt = JSON.parse(localStorage.getItem(LS + '.viewed') || '{}'); // channel -> last_message_at we've looked at
   let firstChannels = true;  // don't flag everything as "new" on first load
   let ok = false, timer = null, hbTimer = null, pollFails = 0;
+  let leaderRev = null;      // running-code rev of the current bus leader (from /cc/whoami)
 
   const pad = (n) => String(n).padStart(2, '0');
   const tms = (s) => { const d = Date.parse((s || '').replace(' ', 'T') + 'Z'); return isNaN(d) ? 0 : d; };
@@ -180,7 +182,7 @@
       if (!r.ok) return null;
       const j = await r.json();
       if (typeof j.epoch !== 'number') return null;
-      return { base: b, host: j.host, epoch: j.epoch, role: j.role || 'leader' };
+      return { base: b, host: j.host, epoch: j.epoch, role: j.role || 'leader', rev: j.rev || null };
     } catch { return null; } finally { clearTimeout(t); }
   }
   async function discoverLeader() {
@@ -195,6 +197,7 @@
     // highest epoch wins; tiebreak on lexicographically-lowest host — same rule as the servers.
     responders.sort((a, b) => (b.epoch - a.epoch) || String(a.host).localeCompare(String(b.host)));
     const best = responders[0];
+    leaderRev = best.rev || null;
     localStorage.setItem(LS + '.leader', JSON.stringify({ base: best.base, host: best.host, epoch: best.epoch }));
     return best;
   }
@@ -260,10 +263,12 @@
     $('rcount').textContent = show.length + (showAllParts() ? '' : ' active');
     rosterEl.innerHTML = show.length ? show.map((i) => {
       const off = i.status !== 'online';
+      const stale = i.rev && leaderRev && i.rev !== leaderRev;
       return `<div class="who ${off ? 'offline' : ''}" data-id="${esc(i.instance_id)}"><div class="row"><span class="pip"></span>` +
-        `<span class="id">${esc(i.instance_id)}</span></div>` +
+        `<span class="id">${esc(i.instance_id)}</span>` +
+        `${stale ? `<span class="stale" title="This node runs ${esc(i.rev)}; the bus leader runs ${esc(leaderRev)}. Pull + re-arm to sync.">stale ${esc(i.rev)}</span>` : ''}</div>` +
         `${i.description ? `<div class="desc">${esc(i.description)}</div>` : ''}` +
-        `<div class="desc">${esc(i.status)} · ${esc(agoTxt(i.last_seen) || i.last_seen)}</div></div>`;
+        `<div class="desc">${esc(i.status)} · ${esc(agoTxt(i.last_seen) || i.last_seen)}${i.rev ? ' · ' + esc(i.rev) : ''}</div></div>`;
     }).join('') : '<div class="empty">none active in the last ' + Math.round(partWin()/60000) + ' min</div>';
     // click a participant → open/point at a DM channel to them
     [...rosterEl.querySelectorAll('.who')].forEach((el) => el.onclick = () => { $('chan').value = 'dm-' + shortOf(el.dataset.id); $('body').focus(); });
@@ -320,7 +325,7 @@
       renderBanner();
       firstChannels = false;
       pollFails = 0;
-      setOK(true, `live · ${channels.length} ch`);
+      setOK(true, `live · ${channels.length} ch${leaderRev ? ' · rev ' + leaderRev : ''}`);
     } catch (e) {
       pollFails++;
       // A run of failures usually means the leader migrated (the node that served us stepped

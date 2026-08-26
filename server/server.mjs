@@ -21,6 +21,7 @@ import { registerTools } from "./tools.mjs";
 import { createRestRouter } from "./rest-api.mjs";
 import { InviteCodeOAuthProvider, createAuthorizeSubmitHandler } from "./auth.mjs";
 import { resolveFull } from "../cc-discover.mjs";
+import { revString, codeRev } from "../cc-rev.mjs";
 
 // --- Transport: Stdio (local) ---
 
@@ -58,6 +59,10 @@ async function startHTTP(db) {
   const EPOCH = parseInt(process.env.CC_EPOCH) || 0;
   const CC_HOST = process.env.CC_HOST || os.hostname();
   const STARTED_AT = new Date().toISOString();
+  // Running-code revision — advertised so the estate can verify every node is on the same
+  // code and nudge stale ones to pull + re-launch (a leader on old code was the /console gap).
+  const REV = revString();
+  const REV_DIRTY = codeRev().dirty;
 
   // --- CORS (required for Claude Desktop custom connectors) ---
 
@@ -108,6 +113,7 @@ async function startHTTP(db) {
       status: "ok",
       server: "cross-claude-mcp",
       version: "2.0.0",
+      rev: REV,
       epoch: EPOCH,
       host: CC_HOST,
       memory: {
@@ -134,6 +140,8 @@ async function startHTTP(db) {
       base_url: `http://${host}`,
       port: PORT,
       version: "2.0.0",
+      rev: REV,
+      dirty: REV_DIRTY,
       started_at: STARTED_AT,
     });
   });

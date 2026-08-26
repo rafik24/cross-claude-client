@@ -27,6 +27,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { resolveFast, resolveFull, loadConfig } from './cc-discover.mjs';
+import { revString } from './cc-rev.mjs';
 
 const args = process.argv.slice(2);
 const instance = args[0];
@@ -73,7 +74,7 @@ async function j(path, opts = {}) {
 const cursors = {};
 async function register() {
   beat();
-  try { await j('/api/register', { method: 'POST', body: JSON.stringify({ instance_id: instance, description: process.env.CC_DESC || '' }) }); }
+  try { await j('/api/register', { method: 'POST', body: JSON.stringify({ instance_id: instance, description: process.env.CC_DESC || '', rev: revString() }) }); }
   catch {}
 }
 

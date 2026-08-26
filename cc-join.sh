@@ -63,6 +63,11 @@ LISTEN_DIR="$HOME/.claude/.cc-listen"
 mkdir -p "$LISTEN_DIR" 2>/dev/null || true
 [ -n "$SID" ] && printf '%s' "$ID" > "$LISTEN_DIR/$SID.id" 2>/dev/null || true
 
+# running-code revision of THIS checkout (short SHA, '+' if the worktree is dirty). Advertised
+# on register so the estate can spot a node on stale code, and compared to the leader below.
+rev=$(git -C "$PWD" rev-parse --short HEAD 2>/dev/null || true)
+[ -n "$rev" ] && [ -n "$(git -C "$PWD" status --porcelain 2>/dev/null)" ] && rev="${rev}+"
+
 # register presence now (fail-soft — never wedge a session start), but report the outcome
 # HONESTLY: the header line must state whether the bus actually answered, not assume it did.
 # curl's %{http_code} is 000 when the connection never lands (server down / wrong host / DNS),
@@ -71,7 +76,7 @@ mkdir -p "$LISTEN_DIR" 2>/dev/null || true
 # as "could not connect" — still honest. Never `exit` non-zero: a SessionStart hook must not wedge.
 http_code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST "$CC_BASE/api/register" \
   -H "Authorization: Bearer ${CC_TOKEN:-}" -H 'content-type: application/json' \
-  -d "{\"instance_id\":\"$ID\",\"description\":\"$topic @ $machine\"}" 2>/dev/null || true)"
+  -d "{\"instance_id\":\"$ID\",\"description\":\"$topic @ $machine\",\"rev\":\"$rev\"}" 2>/dev/null || true)"
 
 case "$http_code" in
   2??)     JOIN_LINE="✅ LIVE CHAT BUS — CONNECTED, registered as: $ID   ($CC_BASE)" ;;
@@ -79,6 +84,16 @@ case "$http_code" in
   401|403) JOIN_LINE="⛔ LIVE CHAT BUS — COULD NOT CONNECT: $CC_BASE rejected the token (HTTP $http_code — check CC_TOKEN in $CFG). Would join as: $ID" ;;
   *)       JOIN_LINE="⚠️ LIVE CHAT BUS — bus at $CC_BASE answered HTTP $http_code (not a clean register). Would join as: $ID" ;;
 esac
+
+# code-drift check: does THIS checkout match the code the bus leader is running? A mismatch means
+# someone pulled and someone didn't — the class of bug where a leader served an old build silently.
+if [ -n "$rev" ]; then
+  leader_rev="$(curl -s -m 5 "$CC_BASE/cc/whoami" 2>/dev/null | grep -o '"rev":"[^"]*"' | head -1 | sed 's/.*:"//; s/"$//')"
+  if [ -n "$leader_rev" ] && [ "$leader_rev" != "null" ] && [ "$rev" != "$leader_rev" ]; then
+    JOIN_LINE="$JOIN_LINE
+   ⚠️ CODE DRIFT — this checkout is $rev but the bus leader runs $leader_rev. To sync: git pull && restart the bus, then re-arm this session."
+  fi
+fi
 
 cat <<EOF
 $JOIN_LINE
