@@ -20,6 +20,8 @@
   header label{font-size:11px;color:var(--dim);margin-left:6px}
   header input{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 8px;font-size:12px;font-family:var(--mono)}
   header input#base{width:190px} header input#token{width:120px} header input#me{width:120px}
+  header button#connect{background:var(--accent);border:1px solid var(--accent);color:#06121f;font-weight:700;font-size:12px;border-radius:6px;padding:5px 12px;cursor:pointer;margin-left:6px}
+  header button#connect:hover{filter:brightness(1.08)}
   header .meta{color:var(--dim);font-size:11px;font-family:var(--mono);margin-left:auto}
   /* settings strip */
   .settings{grid-column:1/3;display:flex;align-items:center;gap:14px;padding:5px 14px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;font-size:11px;color:var(--dim)}
@@ -74,15 +76,17 @@
   <header>
     <span class="dot" id="dot"></span><h1>Cross-Claude console</h1>
     <label>bus</label><input id="base" placeholder="http://100.122.172.29:8787" />
-    <label>token</label><input id="token" type="password" placeholder="api key" />
+    <label title="The bus shared secret: CC_TOKEN from ~/.claude/.cross-claude-bus (a.k.a. MCP_API_KEY) — NOT an Anthropic API key.">token</label><input id="token" type="password" placeholder="bus token (CC_TOKEN)" title="The bus shared secret: CC_TOKEN from ~/.claude/.cross-claude-bus (a.k.a. MCP_API_KEY) — NOT an Anthropic API key." />
     <label>as</label><input id="me" value="po-console" />
+    <button id="connect">Connect</button>
     <span class="meta" id="meta">idle</span>
   </header>
 
   <div class="settings">
     <label title="Channels with no message newer than this are hidden (unless 'show all').">channels active ≤ <input id="chanWin" type="number" min="1" max="1440" value="15" /> min</label>
     <label title="Participants not seen within this window are hidden (unless 'show all').">participants active ≤ <input id="partWin" type="number" min="1" max="1440" value="15" /> min</label>
-    <label class="sw"><input id="showAll" type="checkbox" /> show all (incl. inactive)</label>
+    <label class="sw" title="Show every participant, including those outside the active window."><input id="showAllParts" type="checkbox" /> show all participants</label>
+    <label class="sw" title="Show every channel, including those outside the active window."><input id="showAllChans" type="checkbox" /> show all channels</label>
     <span class="meta" id="wininfo" style="margin-left:auto"></span>
   </div>
 
@@ -95,7 +99,7 @@
     <div id="channels"></div>
   </aside>
 
-  <main id="stream"><div class="sys">Set the bus URL + token above, then messages stream here.</div></main>
+  <main id="stream"><div class="sys">Enter the bus token (CC_TOKEN from ~/.claude/.cross-claude-bus) and click Connect. Messages stream here.</div></main>
 
   <footer>
     <div id="mentions"></div>
@@ -124,7 +128,9 @@
   $('me').value = urlp.get('me') || cfg.me || 'po-console';
   $('chanWin').value = cfg.chanWin || 15;
   $('partWin').value = cfg.partWin || 15;
-  $('showAll').checked = !!cfg.showAll;
+  // Two independent toggles now; fall back to the legacy single `showAll` for back-compat.
+  $('showAllParts').checked = cfg.showAllParts ?? !!cfg.showAll;
+  $('showAllChans').checked = cfg.showAllChans ?? !!cfg.showAll;
 
   let cursors = {};          // per-channel last_id seen (for message fetch)
   let filter = null;         // channel filter (null = all)
@@ -143,8 +149,9 @@
   const shortOf = (id) => (id || '').split('/').pop();
   const chanWin = () => Math.max(1, Number($('chanWin').value) || 15) * 60000;
   const partWin = () => Math.max(1, Number($('partWin').value) || 15) * 60000;
-  const showAll = () => $('showAll').checked;
-  const save = () => localStorage.setItem(LS, JSON.stringify({ base: $('base').value.trim(), token: $('token').value, me: $('me').value.trim(), chanWin: Number($('chanWin').value)||15, partWin: Number($('partWin').value)||15, showAll: showAll() }));
+  const showAllParts = () => $('showAllParts').checked;
+  const showAllChans = () => $('showAllChans').checked;
+  const save = () => localStorage.setItem(LS, JSON.stringify({ base: $('base').value.trim(), token: $('token').value, me: $('me').value.trim(), chanWin: Number($('chanWin').value)||15, partWin: Number($('partWin').value)||15, showAllParts: showAllParts(), showAllChans: showAllChans() }));
   const saveViewed = () => localStorage.setItem(LS + '.viewed', JSON.stringify(viewedAt));
   const base = () => $('base').value.trim().replace(/\/$/, '');
   const hdr = () => ({ 'Authorization': 'Bearer ' + $('token').value.trim() });
@@ -204,8 +211,8 @@
   function renderRoster(list) {
     instances = list;
     const active = list.filter((i) => i.status === 'online' || (Date.now() - tms(i.last_seen)) <= partWin());
-    const show = showAll() ? list : active;
-    $('rcount').textContent = show.length + (showAll() ? '' : ' active');
+    const show = showAllParts() ? list : active;
+    $('rcount').textContent = show.length + (showAllParts() ? '' : ' active');
     rosterEl.innerHTML = show.length ? show.map((i) => {
       const off = i.status !== 'online';
       return `<div class="who ${off ? 'offline' : ''}" data-id="${esc(i.instance_id)}"><div class="row"><span class="pip"></span>` +
@@ -222,9 +229,14 @@
     const rows = channels.map((c) => ({ ...c, age: Date.now() - tms(c.last_message_at), isNew: !firstChannels && tms(c.last_message_at) > (viewedAt[c.name] || 0) && c.name !== filter }))
       .sort((a, b) => (b.isNew - a.isNew) || (tms(b.last_message_at) - tms(a.last_message_at)));
     const inWin = rows.filter((c) => c.age <= chanWin() || c.isNew || c.name === filter);
-    const show = showAll() ? rows : inWin;
-    $('ccount').textContent = show.length + (showAll() ? '' : ' active');
-    chanList.innerHTML = channels.map((c) => `<option value="${esc(c.name)}">`).join('');
+    const show = showAllChans() ? rows : inWin;
+    $('ccount').textContent = show.length + (showAllChans() ? '' : ' active');
+    // The compose-channel dropdown mirrors the VISIBLE channel list (same active-window /
+    // "show all" filter as the sidebar). Fallback: when nothing is visible (all channels are
+    // outside the active window and "show all channels" is off), offer every channel so the
+    // dropdown is never uselessly empty.
+    const dlSource = show.length ? show : rows;
+    chanList.innerHTML = dlSource.map((c) => `<option value="${esc(c.name)}">`).join('');
     const allRow = `<div class="chan ${filter===null?'sel':''}" data-ch=""><span class="n">＊ all channels</span></div>`;
     chansEl.innerHTML = allRow + show.map((c) => {
       const off = c.age > chanWin() && !c.isNew && c.name !== filter;
@@ -232,8 +244,8 @@
         `${c.isNew ? '<span class="newdot"></span>' : ''}<span class="n">#${esc(c.name)}</span>` +
         `<span class="c">${esc(agoTxt(c.last_message_at))} · ${c.message_count}</span></div>`;
     }).join('');
-    if (!showAll() && rows.length > show.length) {
-      chansEl.innerHTML += `<div class="empty">+ ${rows.length - show.length} older (toggle “show all”)</div>`;
+    if (!showAllChans() && rows.length > show.length) {
+      chansEl.innerHTML += `<div class="empty">+ ${rows.length - show.length} older (toggle “show all channels”)</div>`;
     }
     [...chansEl.querySelectorAll('.chan')].forEach((el) => el.onclick = () => {
       filter = el.dataset.ch || null;
@@ -338,8 +350,12 @@
     if (e.key === 'Enter') send();
   });
   $('body').addEventListener('blur', () => setTimeout(closeMentions, 120));
-  ['base','token','me'].forEach((id) => $(id).addEventListener('change', start));
-  ['chanWin','partWin','showAll'].forEach((id) => $(id).addEventListener('change', () => { save(); poll(); }));
+  $('connect').onclick = start;
+  ['base','token','me'].forEach((id) => {
+    $(id).addEventListener('change', start);
+    $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); start(); } });
+  });
+  ['chanWin','partWin','showAllParts','showAllChans'].forEach((id) => $(id).addEventListener('change', () => { save(); poll(); }));
   // auto-connect only when a token is already stored (avoids a 401 flash on a first-ever open)
   if (base() && $('token').value.trim()) start(); else setOK(false, 'set token');
 </script>
