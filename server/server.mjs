@@ -168,6 +168,24 @@ li{margin:4px 0}</style></head>
 <body><p>${escaped}</p></body></html>`);
   });
 
+  // --- Live console (no auth): the browser UI is served by the bus itself, so it "lives in
+  // the server" rather than as a loose file on someone's disk. The HTML is public; every API
+  // call it makes still carries the bearer token the page prompts for. Read fresh each request
+  // so edits ship without a restart. Served at both / and /console for convenience.
+  const sendConsole = async (req, res) => {
+    try {
+      const { readFileSync } = await import("fs");
+      const { join, dirname } = await import("path");
+      const { fileURLToPath } = await import("url");
+      const __dirname = dirname(fileURLToPath(import.meta.url));
+      res.type("html").send(readFileSync(join(__dirname, "..", "cc-console.html"), "utf-8"));
+    } catch (e) {
+      res.status(500).type("text").send("console unavailable: " + e.message);
+    }
+  };
+  app.get("/console", sendConsole);
+  app.get("/", sendConsole);
+
   // --- OpenAPI spec (no auth, needed for ChatGPT Custom GPT Actions) ---
 
   app.get("/openapi.json", async (req, res) => {
@@ -188,8 +206,9 @@ li{margin:4px 0}</style></head>
   });
 
   app.use((req, res, next) => {
-    // Skip auth for public endpoints
-    if (req.path === "/health" || req.path === "/readme" || req.path.startsWith("/openapi.json")) return next();
+    // Skip auth for public endpoints (the console HTML is public; its API calls still carry the token)
+    if (req.path === "/health" || req.path === "/readme" || req.path.startsWith("/openapi.json") ||
+        req.path === "/console" || req.path === "/") return next();
     // /cc/whoami is the unauthenticated discovery beacon — advertises host/epoch/base only,
     // never any secret. Discovery has to reach it before it has anything but the shared token.
     if (req.path === "/cc/whoami") return next();

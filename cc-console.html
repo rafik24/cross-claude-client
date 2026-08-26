@@ -114,7 +114,10 @@
   const stream = $('stream'), rosterEl = $('roster'), chansEl = $('channels'), chanList = $('chanlist'), mentEl = $('mentions');
   const LS = 'cc-console';
   const cfg = JSON.parse(localStorage.getItem(LS) || '{}');
-  const DEFAULT_BASE = 'http://100.122.172.29:8787';
+  // When the console is served BY the bus (http/https), default to that same origin so it
+  // "just works" with no URL typing. Opened as a local file:// it falls back to the tailnet IP.
+  const SERVED_ORIGIN = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin : '';
+  const DEFAULT_BASE = SERVED_ORIGIN || 'http://100.122.172.29:8787';
   const urlp = new URLSearchParams(location.hash ? location.hash.slice(1) : location.search.slice(1));
   $('base').value = urlp.get('base') || cfg.base || DEFAULT_BASE;
   $('token').value = urlp.get('token') || cfg.token || '';
@@ -130,13 +133,13 @@
   let instances = [];        // last roster
   let viewedAt = JSON.parse(localStorage.getItem(LS + '.viewed') || '{}'); // channel -> last_message_at we've looked at
   let firstChannels = true;  // don't flag everything as "new" on first load
-  let ok = false, timer = null;
+  let ok = false, timer = null, hbTimer = null;
 
   const pad = (n) => String(n).padStart(2, '0');
   const tms = (s) => { const d = Date.parse((s || '').replace(' ', 'T') + 'Z'); return isNaN(d) ? 0 : d; };
   const hhmm = (s) => { const d = new Date((s || '').replace(' ', 'T') + 'Z'); return isNaN(d) ? '--:--' : pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); };
   const agoTxt = (s) => { const ms = Date.now() - tms(s); if (!tms(s)) return ''; const m = Math.floor(ms/60000); if (m < 1) return 'just now'; if (m < 60) return m + 'm ago'; const h = Math.floor(m/60); if (h < 24) return h + 'h ago'; return Math.floor(h/24) + 'd ago'; };
-  const esc = (s) => (s||'').replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const esc = (s) => (s||'').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const shortOf = (id) => (id || '').split('/').pop();
   const chanWin = () => Math.max(1, Number($('chanWin').value) || 15) * 60000;
   const partWin = () => Math.max(1, Number($('partWin').value) || 15) * 60000;
@@ -157,7 +160,9 @@
   function addMsg(m) {
     if (seenIds.has(m.id)) return; seenIds.add(m.id);
     msgLog.push(m);
-    if (filter && m.channel !== filter) return;
+    // Always render into the DOM — the channel filter is a display toggle, never a drop.
+    // (Dropping here permanently loses messages that arrive while another channel is selected,
+    //  because the poll cursor + seenIds have already consumed them and won't re-fetch.)
     const el = document.createElement('div');
     el.className = 'msg' + (m.sender === me() ? ' mine' : '') + (m.message_type === 'handoff' ? ' handoff' : '');
     el.dataset.ch = m.channel;
@@ -167,9 +172,11 @@
       `<span class="type ${esc(m.message_type)}">${esc(m.message_type)}</span>` +
       `<span class="from">${esc(m.sender)}</span>` +
       `<span class="body">${esc(m.content)}</span>`;
+    const hidden = filter && m.channel !== filter;
+    el.style.display = hidden ? 'none' : '';
     const atBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
     stream.appendChild(el);
-    if (atBottom) stream.scrollTop = stream.scrollHeight;
+    if (!hidden && atBottom) stream.scrollTop = stream.scrollHeight;
   }
 
   // An ownership handoff is "unacked" until someone OTHER than the sender posts a `response`
@@ -242,8 +249,6 @@
     try {
       const [{ instances: inst }, { channels }] = await Promise.all([api('/api/instances'), api('/api/channels')]);
       renderRoster(inst);
-      // register the console itself so it shows in presence too (fire-and-forget)
-      api('/api/register', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ instance_id: me(), description: 'human live console' }) }).catch(()=>{});
       for (const c of channels) {
         const cur = cursors[c.name] || 0;
         const { messages, last_id } = await api(`/api/messages/${encodeURIComponent(c.name)}?after_id=${cur}`);
@@ -261,9 +266,16 @@
     } catch (e) { setOK(false, String(e.message || e)); }
   }
 
+  // Register the console in presence so it shows online. Heartbeat well under the server's
+  // 120s stale threshold — NOT on every 1.5s poll (that was ~40 register POSTs/min).
+  function registerSelf() {
+    api('/api/register', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ instance_id: me(), description: 'human live console' }) }).catch(()=>{});
+  }
   function start() {
     save(); seenIds = new Set(); cursors = {}; msgLog = []; firstChannels = true; stream.innerHTML = '';
     if (timer) clearInterval(timer);
+    if (hbTimer) clearInterval(hbTimer);
+    registerSelf(); hbTimer = setInterval(registerSelf, 45000);
     poll(); timer = setInterval(poll, 1500);
   }
 
