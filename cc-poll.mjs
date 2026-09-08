@@ -28,6 +28,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { resolveFast, resolveFull, loadConfig } from './cc-discover.mjs';
 import { revString } from './cc-rev.mjs';
+import { wrapForNotification } from './cc-render.mjs';
 
 const args = process.argv.slice(2);
 const instance = args[0];
@@ -109,7 +110,15 @@ async function tick(seed = false) {
       const tag = (addressed && m.message_type === 'handoff') ? ' »HANDOFF — ACK REQUIRED«'
         : atAll ? ' »@ALL«'
         : addressed ? ' »TO YOU«' : '';
-      console.log(`CHAT #${m.channel} ${m.sender} [${m.message_type}]${tag}: ${body}`);
+      // Wrap long bodies so the Claude Code harness delivers them WHOLE: it truncates a single
+      // Monitor event line at ~470 chars and a notification at ~3 KB, which is why a long DM used
+      // to arrive "…(truncated)". Short messages (the common case) are one block, printed at once;
+      // a long one is split into blocks spaced >250ms apart so each lands as its own notification.
+      const blocks = wrapForNotification(`CHAT #${m.channel} ${m.sender} [${m.message_type}]${tag}: ${body}`);
+      for (let bi = 0; bi < blocks.length; bi++) {
+        if (bi > 0) await new Promise((r) => setTimeout(r, 300));
+        console.log(blocks[bi]);
+      }
     }
     if (cursors[c.name] === undefined) cursors[c.name] = res.last_id || 0;
   }

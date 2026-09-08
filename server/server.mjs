@@ -22,6 +22,7 @@ import { createRestRouter } from "./rest-api.mjs";
 import { InviteCodeOAuthProvider, createAuthorizeSubmitHandler } from "./auth.mjs";
 import { resolveFull } from "../cc-discover.mjs";
 import { revString, codeRev } from "../cc-rev.mjs";
+import { attachWsHub } from "./ws-hub.mjs";
 
 // --- Transport: Stdio (local) ---
 
@@ -51,6 +52,10 @@ async function startHTTP(db) {
 
   const app = express();
   const PORT = parseInt(process.env.PORT) || 3000;
+
+  // WebSocket push hub (issue #3). Assigned once the http.Server exists (after app.listen);
+  // declared here so the /health handler can report the live push-connection count.
+  let wsHub = null;
 
   // --- Election / discovery identity (set by the cc-bus supervisor) ---
   // CC_EPOCH: monotonic authority counter — highest epoch wins across the estate.
@@ -123,6 +128,8 @@ async function startHTTP(db) {
       },
       sessions: sessions.size,
       sseTransports: sseTransports.size,
+      wsConnections: wsHub ? wsHub.connectionCount() : 0,
+      wsIdentities: wsHub ? wsHub.identities().length : 0,
       pool: poolStats,
     });
   });
@@ -505,11 +512,12 @@ li{margin:4px 0}</style></head>
     selfDemoteIv.unref?.();   // don't keep the process alive just for this timer
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const httpServer = app.listen(PORT, "0.0.0.0", () => {
     console.log(`cross-claude-mcp v2.0.0 listening on port ${PORT}`);
     console.log(`  Mode:            Standard`);
     console.log(`  Streamable HTTP: POST/GET /mcp`);
     console.log(`  REST API:        /api/* (ChatGPT, Gemini, curl)`);
+    console.log(`  WebSocket push:  GET /cc/ws?identity=<id>&token=<tok>`);
     console.log(`  Legacy SSE:      GET /sse, POST /messages`);
     console.log(`  Health:          GET /health`);
     console.log(`  Auth:            ${process.env.MCP_API_KEY ? "Bearer token required" : "NONE (set MCP_API_KEY)"}`);
@@ -517,6 +525,26 @@ li{margin:4px 0}</style></head>
     console.log(`  Database:        ${process.env.DATABASE_URL ? "PostgreSQL" : "SQLite (local)"}`);
     console.log(`  Cleanup:         Every ${CLEANUP_DAYS} days (checks hourly)`);
   });
+
+  // --- WebSocket push (issue #3) ---
+  // Attach the hub to the SAME server/port, then wrap db.sendMessage so EVERY insert path
+  // (REST /api/messages, the MCP send_message tool, the migrate announce) pushes a frame to
+  // the addressed lanes. One choke point → no insert route can forget to notify. The wrap
+  // preserves the original return value (sync rowid on SQLite, a Promise on PG), so existing
+  // `await db.sendMessage(...)` callers are unaffected; the push fires after the id resolves.
+  wsHub = attachWsHub(httpServer, { token: API_TOKEN, log: (m) => console.log(m) });
+  const _origSendMessage = db.sendMessage.bind(db);
+  db.sendMessage = (channel, sender, content, message_type, inReplyTo) => {
+    const ret = _origSendMessage(channel, sender, content, message_type, inReplyTo);
+    Promise.resolve(ret)
+      .then((id) => {
+        try {
+          wsHub.notify({ id: Number(id), channel, sender, content, message_type: message_type || "message", created_at: new Date().toISOString() });
+        } catch { /* push is best-effort; the REST cursor backfill is the reliability path */ }
+      })
+      .catch(() => {});
+    return ret;
+  };
 }
 
 // --- Main ---

@@ -63,11 +63,12 @@ try {
   try { fresh = (Date.now() - statSync(beacon).mtimeMs) < FRESH_MS; } catch {}
   if (fresh) done(0);
 
-  const pollHint = cfg.CC_POLL || '<cc-poll.mjs>';
+  // Prefer the push receiver (cc-ws) in the hint; fall back to cc-poll for older enrolments.
+  const recvHint = cfg.CC_WS || cfg.CC_POLL || '<cc-ws.mjs>';
   done(2, [
     `⛔ CHAT BUS — this session (${id}) is NOT listening; blocked before editing ${file || 'an estate file'}.`,
     `On an enrolled machine every session must be on the live bus before it edits code. Arm receive, then retry:`,
-    `  Monitor({ command: 'node ${pollHint} ${id}', description: 'cross-claude bus (${id})', persistent: true })`,
+    `  Monitor({ command: 'node ${recvHint} ${id}', description: 'cross-claude bus (${id})', persistent: true })`,
     `(The SessionStart join hook prints this exact line. One-off bypass: set CC_LISTEN_BYPASS=1.)`,
   ].join('\n'));
 } catch {

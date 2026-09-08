@@ -62,9 +62,11 @@ try {
 
 // 3. tell the session how to (re)arm under the new id
 const HERE = dirname(fileURLToPath(import.meta.url));
-const poll = join(HERE, 'cc-poll.mjs');
+const ws = join(HERE, 'cc-ws.mjs');
 const send = join(HERE, 'cc-send.mjs');
 console.log(`named on the bus as: ${id}`);
 console.log(`ARM (or RE-ARM) live-receive with THIS id — stop any prior Monitor first:`);
-console.log(`  Monitor({ command: 'node ${poll} ${id}', description: 'cross-claude bus (${id})', persistent: true })`);
+// cc-ws is the real-time PUSH receiver (WebSocket + cursor backfill, issue #3). It auto-falls
+// back to the old 2s poll if the leader is too old to speak WS, so it is always safe to arm.
+console.log(`  Monitor({ command: 'node ${ws} ${id}', description: 'cross-claude bus (${id})', persistent: true })`);
 console.log(`From now, send as:  node ${send} ${id} <channel|all> 'message'`);

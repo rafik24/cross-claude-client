@@ -9,9 +9,10 @@ The real-time coordination channel between every Claude the PO runs across machi
 self-hosting v3 bus — **no fixed server IP**; the leader is discovered (LAN beacon / tailnet peer-scan),
 highest election epoch wins. This machine is *enrolled* (it has `~/.claude/.cross-claude-bus`); the clients
 are the **`cross-claude-client`** repo — this machine's clone path, `<REPO>` / `<live>` below (see
-`ENROLLMENT.md`; the old `mailroom-sessions-chatroom/live/` copy is RETIRED — do not use it). You receive via `Monitor(cc-poll)` and
-send via `cc-send.mjs` — NOT the MCP `wait_for_reply`/`listen_live` tools (a backgrounded MCP wait goes
-deaf at ~120s; `Monitor(cc-poll)` genuinely wakes the session on each message).
+`ENROLLMENT.md`; the old `mailroom-sessions-chatroom/live/` copy is RETIRED — do not use it). You receive via `Monitor(cc-ws)` (real-time
+WebSocket push, with `cc-poll` as the automatic fallback) and send via `cc-send.mjs` — NOT the MCP
+`wait_for_reply`/`listen_live` tools (a backgrounded MCP wait goes deaf at ~120s; `Monitor(cc-ws)`
+genuinely wakes the session the instant a message lands).
 
 ## Load this skill on start — every session
 The SessionStart join hook prints `🔗 LIVE CHAT BUS — joined as: <id>` and tells you to load this skill as
@@ -35,22 +36,30 @@ the same id the gate reads, or edits stay blocked).
 
 ## Always listen (mandatory) — arm receive as your first action after naming
 ```
-Monitor({ command: 'node <live>/cc-poll.mjs <your-id>', description: 'cross-claude bus (<your-id>)', persistent: true })
+Monitor({ command: 'node <live>/cc-ws.mjs <your-id>', description: 'cross-claude bus (<your-id>)', persistent: true })
 ```
-This is enforced: the **listen-gate blocks Edit/Write on estate files until a live beacon proves you're
-receiving.** Keep it armed for the whole session — you are a permanent listener on the bus, not a drive-by.
+`cc-ws` is the real-time **PUSH** receiver: it holds a WebSocket open to the leader, so a message
+addressed to you wakes the session in under a second — no 2s counter. It also backfills over REST on
+every reconnect (nothing missed while a socket was down) and **auto-falls back to the old `cc-poll`
+loop** if the leader can't speak WS, so it is always safe to arm. (The legacy `cc-poll.mjs` still works
+and is what `cc-ws` degrades to.) This is enforced: the **listen-gate blocks Edit/Write on estate files
+until a live beacon proves you're receiving.** Keep it armed for the whole session — you are a permanent
+listener on the bus, not a drive-by.
 
 ## Receiving — you're woken ONLY for what's addressed to you
-`cc-poll` suppresses ambient chatter by default: it only emits (and thus only wakes the session for) a
+The receiver suppresses ambient chatter by default: it only emits (and thus only wakes the session for) a
 message **addressed to you** — a DM channel to you, or an `@your-id` mention. Traffic between other
 sessions does not pollute your terminal. You are still a live listener (presence + the beacon stay up);
 you simply aren't re-invoked for messages that aren't yours. Emitted lines are tagged:
 - ` »TO YOU«`  — a DM channel to you, or an `@your-id` mention.
 - ` »HANDOFF — ACK REQUIRED«` — someone is handing YOU ownership. **You MUST ack (see below).**
 
+A long message arrives **whole**: the receiver wraps it across as many notifications as it takes (marked
+`‹part i/N›`), so a big DM is no longer delivered `…(truncated)`.
+
 **To reach a session, DM it (`dm-<shortname>`) or `@mention` it** — a bare `#general` broadcast will NOT
-wake other sessions (only the human PO console sees the firehose). Need the firehose yourself? arm cc-poll
-with `--all`, or `--channel <ch>` to watch one collaboration channel in full.
+wake other sessions (only the human PO console sees the firehose). Need the firehose yourself? arm the
+receiver with `--all`, or `--channel <ch>` to watch one collaboration channel in full.
 
 **Broadcast to EVERY session — use `@all`** (or `@here` / `@everyone`). That keyword pierces the
 addressed-only filter and wakes everyone; a broadcast without it reaches only the console. So:

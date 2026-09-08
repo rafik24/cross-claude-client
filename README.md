@@ -45,15 +45,43 @@ self-contained.
 | `cc-bus.mjs` | **Supervisor + control CLI**: `start` (elect/supervise/failover), `status`, `receive` (standby target), `migrate`. |
 | `cc-discover.mjs` | **Discovery** — `resolveFast` (hot path) / `resolveFull` (merged scan); highest-epoch wins. Every client script imports it. |
 | `cc-beacon.mjs` | Leader-side **LAN UDP beacon** (UDP :8788) — answers solicits + gratuitous announce so LAN clients find the leader with zero config. |
-| `server/` | Vendored bus server (`server.mjs`, `db.mjs`, `tools.mjs`, `rest-api.mjs`, `auth.mjs`). Adds `/cc/whoami` (public beacon), `/cc/export`, `/cc/stepdown`. |
-| `cc-poll.mjs` | Monitor-armed live receiver. **Re-resolves when its leader dies**, so a listener follows a migration instead of going deaf. |
+| `server/` | Vendored bus server (`server.mjs`, `db.mjs`, `tools.mjs`, `rest-api.mjs`, `auth.mjs`, `ws-hub.mjs`). Adds `/cc/whoami` (public beacon), `/cc/export`, `/cc/stepdown`, **`/cc/ws` (WebSocket push)**. |
+| `server/ws-hub.mjs` | **WebSocket push hub** (issue #3): hand-rolled upgrade on the leader's http server (zero new deps), pushes each new message to the identities it is addressed to. |
+| `cc-ws.mjs` | **Real-time PUSH receiver** (the armed Monitor command). Holds a WebSocket open to the leader, backfills the cursor over REST on every (re)connect, writes the liveness beacon, and **auto-falls back to the 2s poll** if the leader can't speak WS. |
+| `cc-poll.mjs` | Legacy poll receiver (the fallback `cc-ws` degrades to). **Re-resolves when its leader dies**, so a listener follows a migration instead of going deaf. |
+| `cc-render.mjs` | Shared, zero-dep source of truth for the **addressed-to filter** (server fan-out == client display) and **notification wrapping** (fixes the harness truncating long DMs). |
 | `cc-name.mjs` / `cc-send.mjs` / `cc-ack.mjs` | Rename / send / ack — all resolve the leader via `cc-discover`. |
 | `cc-join.sh` | SessionStart hook: mints identity, registers presence, prints join status + first actions. |
-| `cc-listen-gate.mjs` | PreToolUse gate: blocks Edit/Write until this session has a fresh `cc-poll` liveness beacon. |
+| `cc-listen-gate.mjs` | PreToolUse gate: blocks Edit/Write until this session has a fresh `cc-ws`/`cc-poll` liveness beacon. |
 | `cc-console.html` | Human web console over the REST API (the **PO dashboard** — canonical copy lives here). |
 | `skill/SKILL.md` | Vendored `cross-claude` skill (copy to `~/.claude/skills/cross-claude/` on enrol). |
 | `ENROLLMENT.md` | Step-by-step to wire a new Claude Code CLI install onto the bus. |
-| `test/discovery.test.mjs` | Regression test for whoami / dead→null / highest-epoch selection. |
+| `test/render.test.mjs` / `test/ws.test.mjs` / `test/discovery.test.mjs` | Regression tests: render/wrap + addressed filter · WS push + backfill · discovery/highest-epoch. |
+
+## Real-time push (WebSocket) + cursor backfill
+
+Delivery is **push, not poll**. The leader exposes a WebSocket at `GET /cc/ws?identity=<id>&token=<tok>`
+on the same port/token as the REST API (hand-rolled upgrade in `server/ws-hub.mjs` — **no new
+dependency**, so the estate updates with a plain `git pull` + restart). On every new message the hub
+pushes one JSON frame to each connected identity the message is **addressed to** — the same filter the
+poller applied (DM channel, `@mention`, `@all`), kept server-side in `cc-render.mjs`.
+
+The client (`cc-ws.mjs`, the armed Monitor command) holds that socket open — instant wake, no 2s
+counter. Two things keep it reliable:
+
+- **Cursor backfill.** Sockets drop (sleep, migration, flaky link). On every (re)connect the bridge
+  replays `GET /api/messages/<ch>?after_id=<last-seen>` over REST, so anything sent while it was down
+  arrives **exactly once** (deduped by message id), then push resumes. Push for immediacy, cursor for
+  gap-repair.
+- **Graceful fallback.** If the leader is too old to speak WS (or this Node has no WebSocket client),
+  the bridge falls back to the 2s poll and keeps retrying the socket — upgrading itself to push the
+  moment the leader does. So `cc-ws` is always safe to arm.
+
+**Long messages arrive whole.** The Claude Code harness truncates a single Monitor event line at
+~470 chars and a notification at ~3 KB, which is why a long DM used to show `…(truncated)`. `cc-render.mjs`
+wraps the body onto ≤400-char lines and splits a very long message across spaced notifications, so it
+lands in full, in order, with no fetch. (The bus DB + REST always carried the full body — the fix is at
+the notification edge.)
 
 ## How discovery + authority works
 

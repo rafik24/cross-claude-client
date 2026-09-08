@@ -25,6 +25,7 @@ CFG="${CC_BUS_CONFIG:-$HOME/.claude/.cross-claude-bus}"
 [ -f "$CFG" ] || exit 0
 command -v node >/dev/null 2>&1 || exit 0
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WS="$HERE/cc-ws.mjs"
 POLL="$HERE/cc-poll.mjs"
 SEND="$HERE/cc-send.mjs"
 NAME="$HERE/cc-name.mjs"
@@ -39,7 +40,7 @@ SID="$(printf '%s' "$PAYLOAD" | node -e 'let s="";process.stdin.on("data",d=>s+=
 # On Windows git-bash, convert MSYS paths (/d/…) to node-friendly ones (D:/…) so the printed
 # `node …` commands resolve. No-op on Linux (cygpath absent).
 if command -v cygpath >/dev/null 2>&1; then
-  HERE="$(cygpath -m "$HERE")"; POLL="$(cygpath -m "$POLL")"; SEND="$(cygpath -m "$SEND")"
+  HERE="$(cygpath -m "$HERE")"; WS="$(cygpath -m "$WS")"; POLL="$(cygpath -m "$POLL")"; SEND="$(cygpath -m "$SEND")"
   NAME="$(cygpath -m "$NAME")"; ACK="$(cygpath -m "$ACK")"
 fi
 
@@ -104,7 +105,9 @@ $JOIN_LINE
         node $NAME ${SID:-<session_id>} "<what you're working on>"
         — prints your named id + the exact Monitor line to arm. Do this BEFORE step 3 to arm once.
    3. ARM RECEIVE (MANDATORY — the listen-gate blocks Edit/Write until a live beacon exists):
-        Monitor({ command: 'node $POLL $ID', description: 'cross-claude bus ($ID)', persistent: true })
+        Monitor({ command: 'node $WS $ID', description: 'cross-claude bus ($ID)', persistent: true })
+        — cc-ws is the real-time PUSH receiver (WebSocket + cursor backfill); it auto-falls back to
+          the old 2s poll if the leader can't speak WS, so it is always safe to arm.
         — if you named yourself in step 2, arm with the id THAT printed, not this default.
    Send:  node $SEND <your-id> <channel|all> 'message' [--type status|request|response|handoff|done]
    ACK a handoff:  node $ACK <your-id> <channel> 'taking X into my lane'
