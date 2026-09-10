@@ -1,175 +1,409 @@
-/**
- * REST API layer for Cross-Claude MCP.
- *
- * Exposes the same message bus functionality as the MCP tools,
- * but via plain REST endpoints that any HTTP client can call —
- * ChatGPT Custom GPTs (Actions), Gemini, open-source agents, curl, etc.
- *
- * Mount: app.use("/api", createRestRouter(db))
- */
+// rest-api.mjs — HTTP surface for the Crosstalk coordination bus.
+//
+// Exports a single factory, createRestRouter(db), returning an express.Router that
+// the server mounts at /api. Every route is a thin, validated adapter over the db
+// object's method interface: parse + check the request, call one db method, shape
+// the JSON reply. All persistence lives in db.mjs; nothing here talks to SQL.
+//
+// Conventions used throughout:
+//   - handlers are async and wrapped by run() so any rejection reaches the error
+//     middleware (behaviourally identical to try/catch -> next(e));
+//   - bad input -> 400 {error}; a missing referenced id/key -> 404 {error};
+//   - success payloads follow the shapes named in the spec.
 
-import { Router } from "express";
-import { STALE_THRESHOLD_SECONDS } from "./tools.mjs";
-import { normalizeChannelName } from "./db.mjs";
+import express from 'express';
+import { WORK_STATES, WORK_KINDS, normalizeChannelName } from './db.mjs';
 
-/**
- * @param {object} db - Database instance (SqliteDB or PostgresDB)
- * @returns {Router}
- */
+// Accepted values for a message's message_type field. This is the wire vocabulary
+// for chatter on a channel and is unrelated to the work-board's kinds/states.
+const MESSAGE_TYPES = ['message', 'request', 'response', 'status', 'handoff', 'done'];
+
+// A heartbeat older than this (seconds) is treated as offline when /instances is read.
+const PRESENCE_STALE_SECONDS = 90;
+
+// Defaults for the two list endpoints that page results.
+const DEFAULT_MESSAGE_LIMIT = 20;
+const DEFAULT_SEARCH_LIMIT = 10;
+
+// Hard ceiling on any client-supplied page size, so a single request can't ask for
+// an unbounded scan. Applies on top of the defaults above.
+const MAX_LIMIT = 200;
+
+// Input size ceilings. Free-text bodies are capped by BYTE size (Buffer.byteLength,
+// UTF-8) so a multibyte payload can't slip past a char count; short identifier-like
+// fields (title, key) are capped by CHARACTER length. Oversize -> 413.
+const MAX_CONTENT_BYTES = 16 * 1024; // 16 KB
+const MAX_TITLE_CHARS = 512;
+const MAX_KEY_CHARS = 256;
+
+// --- small local helpers -------------------------------------------------------
+
+function isFilledString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+// Coerce a query/route value to a non-negative integer, or undefined when it is
+// absent or not a clean integer. Used for ids, after_id and limits.
+function toCount(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+
+// Resolve a client-supplied page size: fall back to `fallback` when absent/invalid,
+// then clamp to MAX_LIMIT so no request can ask for an unbounded scan.
+function toLimit(value, fallback) {
+  return Math.min(toCount(value) ?? fallback, MAX_LIMIT);
+}
+
+function reject(res, message) {
+  return res.status(400).json({ error: message });
+}
+
+function notFound(res, message) {
+  return res.status(404).json({ error: message });
+}
+
+function tooLarge(res, message) {
+  return res.status(413).json({ error: message });
+}
+
 export function createRestRouter(db) {
-  const router = Router();
-  router.use((req, res, next) => {
-    // express.json() should already be applied, but ensure it
-    if (req.is("application/json") && !req.body) {
-      return res.status(400).json({ error: "Request body must be JSON" });
-    }
-    next();
-  });
+  const router = express.Router();
 
-  // --- Instances ---
+  // Funnel an async handler's rejection into the error middleware below.
+  const run = (handler) => (req, res, next) =>
+    Promise.resolve(handler(req, res, next)).catch(next);
 
-  router.post("/register", async (req, res, next) => {
-    try {
-      const { instance_id, description, rev } = req.body;
-      if (!instance_id) return res.status(400).json({ error: "instance_id is required" });
-      await db.registerInstance(instance_id, description || null, null, rev || null);
+  // --- presence ---------------------------------------------------------------
+
+  router.post(
+    '/register',
+    run(async (req, res) => {
+      const { instance_id, description, rev } = req.body || {};
+      if (!isFilledString(instance_id)) return reject(res, 'instance_id is required');
+      await db.registerInstance(instance_id, description ?? null, rev ?? null);
       res.json({ ok: true, instance_id });
-    } catch (e) { next(e); }
-  });
+    })
+  );
 
-  router.get("/instances", async (req, res, next) => {
-    try {
-      await db.markStaleOffline(STALE_THRESHOLD_SECONDS);
+  router.get(
+    '/instances',
+    run(async (_req, res) => {
+      // Sweep stale heartbeats to offline before reporting the roster.
+      await db.markStaleOffline(PRESENCE_STALE_SECONDS);
       const instances = await db.listInstances();
       res.json({ instances });
-    } catch (e) { next(e); }
-  });
+    })
+  );
 
-  // --- Channels ---
+  // --- channels ---------------------------------------------------------------
 
-  router.post("/channels", async (req, res, next) => {
-    try {
-      const { name, description } = req.body;
-      if (!name) return res.status(400).json({ error: "name is required" });
-      const normalized = normalizeChannelName(name);
-      if (!normalized) return res.status(400).json({ error: `Invalid channel name "${name}"` });
-      await db.createChannel(normalized, description || null);
-      res.json({ ok: true, channel: normalized });
-    } catch (e) { next(e); }
-  });
+  router.post(
+    '/channels',
+    run(async (req, res) => {
+      const { name, description } = req.body || {};
+      const channel = normalizeChannelName(typeof name === 'string' ? name : '');
+      if (!channel) return reject(res, 'a valid channel name is required');
+      await db.createChannel(channel, description ?? null);
+      res.json({ ok: true, channel });
+    })
+  );
 
-  router.get("/channels", async (req, res, next) => {
-    try {
+  router.get(
+    '/channels',
+    run(async (_req, res) => {
       const channels = await db.listChannelsWithActivity();
       res.json({ channels });
-    } catch (e) { next(e); }
-  });
+    })
+  );
 
-  router.get("/channels/search", async (req, res, next) => {
-    try {
-      const { q } = req.query;
-      if (!q) return res.status(400).json({ error: "q (query) parameter is required" });
+  router.get(
+    '/channels/search',
+    run(async (req, res) => {
+      const q = req.query.q;
+      if (!isFilledString(q)) return reject(res, 'q is required');
       const channels = await db.findChannels(q);
       res.json({ channels });
-    } catch (e) { next(e); }
-  });
+    })
+  );
 
-  // --- Messages ---
+  // --- messages ---------------------------------------------------------------
 
-  router.post("/messages", async (req, res, next) => {
-    try {
-      const { channel = "general", sender, content, message_type = "message", in_reply_to } = req.body;
-      if (!sender) return res.status(400).json({ error: "sender is required" });
-      if (!content) return res.status(400).json({ error: "content is required" });
-      const validTypes = ["message", "request", "response", "status", "handoff", "done"];
-      if (!validTypes.includes(message_type)) {
-        return res.status(400).json({ error: `message_type must be one of: ${validTypes.join(", ")}` });
+  router.post(
+    '/messages',
+    run(async (req, res) => {
+      const body = req.body || {};
+      const { sender, content } = body;
+      const messageType = body.message_type ?? 'message';
+
+      if (!isFilledString(sender)) return reject(res, 'sender is required');
+      if (!isFilledString(content)) return reject(res, 'content is required');
+      if (Buffer.byteLength(content, 'utf8') > MAX_CONTENT_BYTES) {
+        return tooLarge(res, `content exceeds the ${MAX_CONTENT_BYTES}-byte limit`);
       }
-      const normalized = normalizeChannelName(channel);
-      if (!normalized) return res.status(400).json({ error: `Invalid channel name "${channel}"` });
-      // Auto-create channel if it doesn't exist
-      await db.createChannel(normalized, null);
-      const id = await db.sendMessage(normalized, sender, content, message_type, in_reply_to || null);
-      res.json({ ok: true, id: Number(id), channel: normalized, message_type });
-    } catch (e) { next(e); }
-  });
+      if (!MESSAGE_TYPES.includes(messageType)) {
+        return reject(res, `message_type must be one of: ${MESSAGE_TYPES.join(', ')}`);
+      }
 
-  router.get("/messages/:channel", async (req, res, next) => {
-    try {
-      const { channel } = req.params;
-      const after_id = req.query.after_id ? parseInt(req.query.after_id) : undefined;
-      const instance_id = req.query.instance_id;
-      const limit = parseInt(req.query.limit) || 20;
+      // in_reply_to, when supplied, must reference a real message. A missing parent
+      // would otherwise hit the messages(in_reply_to) FK and surface as a 500 — so we
+      // validate up front and 400, mirroring how /work checks parent_id.
+      let inReplyTo = null;
+      const rawReplyTo = body.in_reply_to;
+      if (rawReplyTo !== undefined && rawReplyTo !== null && rawReplyTo !== '') {
+        const candidate = toCount(rawReplyTo);
+        // Message ids are positive integers; 0/invalid can never name a real row.
+        const parent = candidate && candidate > 0 ? await db.getMessage(candidate) : null;
+        if (!parent) return reject(res, `in_reply_to ${rawReplyTo} does not exist`);
+        inReplyTo = candidate;
+      }
+
+      // Default to 'general', normalize, and make sure the channel row exists.
+      const channel = normalizeChannelName(body.channel ?? 'general') || 'general';
+      await db.createChannel(channel, null);
+
+      const id = await db.sendMessage(channel, sender, content, messageType, inReplyTo);
+      res.json({ ok: true, id, channel, message_type: messageType });
+    })
+  );
+
+  router.get(
+    '/messages/:channel',
+    run(async (req, res) => {
+      const channel = normalizeChannelName(req.params.channel);
+      const afterId = toCount(req.query.after_id);
+      const instanceId = isFilledString(req.query.instance_id) ? req.query.instance_id : undefined;
+      const limit = toLimit(req.query.limit, DEFAULT_MESSAGE_LIMIT);
 
       let messages;
-      if (instance_id && after_id !== undefined) {
-        messages = await db.getUnread(channel, after_id, instance_id);
-      } else if (after_id !== undefined) {
-        messages = await db.getMessagesSince(channel, after_id);
+      if (instanceId !== undefined && afterId !== undefined) {
+        // Everything newer than afterId that this instance did not itself send.
+        messages = await db.getUnread(channel, afterId, instanceId);
+      } else if (afterId !== undefined) {
+        // Everything newer than afterId (ascending).
+        messages = await db.getMessagesSince(channel, afterId);
       } else {
-        messages = await db.getMessages(channel, limit);
-        messages.sort((a, b) => a.id - b.id);
+        // Latest `limit`, returned oldest-first for natural reading order.
+        const latest = await db.getMessages(channel, limit);
+        messages = latest.slice().reverse();
       }
 
-      const last_id = messages.length > 0 ? Number(messages[messages.length - 1].id) : null;
-      res.json({ messages, last_id });
-    } catch (e) { next(e); }
-  });
+      const lastId = messages.length ? messages[messages.length - 1].id : (afterId ?? 0);
+      res.json({ messages, last_id: lastId });
+    })
+  );
 
-  router.get("/messages/:channel/:id/replies", async (req, res, next) => {
-    try {
-      const id = parseInt(req.params.id);
+  router.get(
+    '/messages/:channel/:id/replies',
+    run(async (req, res) => {
+      const id = toCount(req.params.id);
+      if (id === undefined) return reject(res, 'a numeric message id is required');
       const parent = await db.getMessage(id);
-      if (!parent) return res.status(404).json({ error: `Message #${id} not found` });
+      if (!parent) return notFound(res, 'message not found');
       const replies = await db.getReplies(id);
       res.json({ parent, replies });
-    } catch (e) { next(e); }
-  });
+    })
+  );
 
-  router.get("/search", async (req, res, next) => {
-    try {
-      const { q } = req.query;
-      if (!q) return res.status(400).json({ error: "q (query) parameter is required" });
-      const limit = parseInt(req.query.limit) || 10;
+  router.get(
+    '/search',
+    run(async (req, res) => {
+      const q = req.query.q;
+      if (!isFilledString(q)) return reject(res, 'q is required');
+      const limit = toLimit(req.query.limit, DEFAULT_SEARCH_LIMIT);
       const messages = await db.searchMessages(q, limit);
       res.json({ messages });
-    } catch (e) { next(e); }
-  });
+    })
+  );
 
-  // --- Shared Data ---
+  // --- shared data ------------------------------------------------------------
 
-  router.post("/data", async (req, res, next) => {
-    try {
-      const { key, content, sender, description } = req.body;
-      if (!key) return res.status(400).json({ error: "key is required" });
-      if (!content) return res.status(400).json({ error: "content is required" });
-      if (!sender) return res.status(400).json({ error: "sender is required" });
-      await db.shareData(key, content, sender, description || null);
-      const size_bytes = Buffer.byteLength(content);
-      res.json({ ok: true, key, size_bytes });
-    } catch (e) { next(e); }
-  });
+  router.post(
+    '/data',
+    run(async (req, res) => {
+      const { key, content, sender, description } = req.body || {};
+      if (!isFilledString(key)) return reject(res, 'key is required');
+      if (!isFilledString(content)) return reject(res, 'content is required');
+      if (!isFilledString(sender)) return reject(res, 'sender is required');
+      if (key.length > MAX_KEY_CHARS) {
+        return tooLarge(res, `key exceeds the ${MAX_KEY_CHARS}-character limit`);
+      }
+      if (Buffer.byteLength(content, 'utf8') > MAX_CONTENT_BYTES) {
+        return tooLarge(res, `content exceeds the ${MAX_CONTENT_BYTES}-byte limit`);
+      }
+      await db.shareData(key, content, sender, description ?? null);
+      res.json({ ok: true, key, size_bytes: Buffer.byteLength(content, 'utf8') });
+    })
+  );
 
-  router.get("/data", async (req, res, next) => {
-    try {
+  router.get(
+    '/data',
+    run(async (_req, res) => {
       const items = await db.listSharedData();
       res.json({ items });
-    } catch (e) { next(e); }
-  });
+    })
+  );
 
-  router.get("/data/:key", async (req, res, next) => {
-    try {
-      const data = await db.getSharedData(req.params.key);
-      if (!data) return res.status(404).json({ error: `No shared data for key "${req.params.key}"` });
-      res.json(data);
-    } catch (e) { next(e); }
-  });
+  router.get(
+    '/data/:key',
+    run(async (req, res) => {
+      const doc = await db.getSharedData(req.params.key);
+      if (!doc) return notFound(res, 'shared data not found');
+      res.json(doc);
+    })
+  );
 
-  // --- Error handler ---
+  // --- work board -------------------------------------------------------------
 
-  router.use((err, req, res, _next) => {
-    console.error("REST API error:", err);
-    res.status(500).json({ error: "Internal server error" });
+  router.post(
+    '/work',
+    run(async (req, res) => {
+      const body = req.body || {};
+      if (!isFilledString(body.title)) return reject(res, 'title is required');
+      if (body.title.length > MAX_TITLE_CHARS) {
+        return tooLarge(res, `title exceeds the ${MAX_TITLE_CHARS}-character limit`);
+      }
+
+      const kind = body.kind ?? undefined;
+      if (kind !== undefined && !WORK_KINDS.includes(kind)) {
+        return reject(res, `kind must be one of: ${WORK_KINDS.join(', ')}`);
+      }
+
+      const state = body.state ?? undefined;
+      if (state !== undefined && !WORK_STATES.includes(state)) {
+        return reject(res, `state must be one of: ${WORK_STATES.join(', ')}`);
+      }
+
+      // parent_id, when supplied, must be a real integer id pointing at a live item.
+      let parentId;
+      if (body.parent_id !== undefined && body.parent_id !== null && body.parent_id !== '') {
+        parentId = toCount(body.parent_id);
+        if (parentId === undefined) return reject(res, 'parent_id must be a positive integer');
+        const parent = await db.getWorkItem(parentId);
+        if (!parent) return reject(res, 'parent work item not found');
+      }
+
+      const item = await db.createWorkItem({
+        project: body.project,
+        title: body.title,
+        external_ref: body.external_ref,
+        parent_id: parentId,
+        kind,
+        domain: body.domain,
+        owner: body.owner,
+        state,
+        created_by: body.created_by,
+      });
+      res.json({ ok: true, item });
+    })
+  );
+
+  router.get(
+    '/work',
+    run(async (req, res) => {
+      // `state` accepts either a single value (state=queued) or a comma-separated
+      // list (state=queued,claimed). A list is passed to the db as `states`; a lone
+      // value stays on `state` so the single-filter path is unchanged.
+      const rawState = req.query.state;
+      let state;
+      let states;
+      if (typeof rawState === 'string' && rawState.includes(',')) {
+        states = rawState.split(',').map((s) => s.trim()).filter(Boolean);
+      } else {
+        state = rawState;
+      }
+
+      const items = await db.listWorkItems({
+        project: req.query.project,
+        state,
+        states,
+        owner: req.query.owner,
+        parent_id: toCount(req.query.parent_id),
+        kind: req.query.kind,
+        updated_after: req.query.updated_after,
+      });
+      res.json({ items });
+    })
+  );
+
+  router.get(
+    '/work/:id',
+    run(async (req, res) => {
+      const id = toCount(req.params.id);
+      if (id === undefined) return reject(res, 'a numeric work id is required');
+      const item = await db.getWorkItem(id);
+      if (!item) return notFound(res, 'work item not found');
+      res.json({ item });
+    })
+  );
+
+  router.post(
+    '/work/:id/claim',
+    run(async (req, res) => {
+      const id = toCount(req.params.id);
+      if (id === undefined) return reject(res, 'a numeric work id is required');
+      const { owner } = req.body || {};
+      if (!isFilledString(owner)) return reject(res, 'owner is required');
+
+      const existing = await db.getWorkItem(id);
+      if (!existing) return notFound(res, 'work item not found');
+
+      // The atomic mutex lives in db.claimWorkItem: a second session claiming an
+      // already-owned item comes back claimed:false, which we surface as 409.
+      const result = await db.claimWorkItem(id, owner);
+      if (!result.claimed) {
+        return res.status(409).json({
+          error: 'already claimed',
+          reason: 'already_claimed',
+          owner: result.item?.owner ?? null,
+          item: result.item,
+        });
+      }
+      res.json({ ok: true, item: result.item });
+    })
+  );
+
+  router.post(
+    '/work/:id/handoff',
+    run(async (req, res) => {
+      const id = toCount(req.params.id);
+      if (id === undefined) return reject(res, 'a numeric work id is required');
+      const existing = await db.getWorkItem(id);
+      if (!existing) return notFound(res, 'work item not found');
+
+      // An empty/absent owner releases the item (owner -> null); state is preserved.
+      const raw = (req.body || {}).owner;
+      const newOwner = isFilledString(raw) ? raw : null;
+      const item = await db.transferWorkItem(id, newOwner);
+      res.json({ ok: true, item });
+    })
+  );
+
+  router.post(
+    '/work/:id/state',
+    run(async (req, res) => {
+      const id = toCount(req.params.id);
+      if (id === undefined) return reject(res, 'a numeric work id is required');
+      const { state } = req.body || {};
+      if (!isFilledString(state) || !WORK_STATES.includes(state)) {
+        return reject(res, `state must be one of: ${WORK_STATES.join(', ')}`);
+      }
+      const existing = await db.getWorkItem(id);
+      if (!existing) return notFound(res, 'work item not found');
+      const item = await db.setWorkItemState(id, state);
+      res.json({ ok: true, item });
+    })
+  );
+
+  // --- error middleware -------------------------------------------------------
+  // Any rejection surfaced by run() lands here: log it and answer 500.
+  // eslint-disable-next-line no-unused-vars -- express detects an error handler by arity (4 args)
+  router.use((err, _req, res, _next) => {
+    // Log the real detail server-side; never leak err.message to the client.
+    console.error('[rest-api] unhandled error:', err);
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'internal server error' });
   });
 
   return router;

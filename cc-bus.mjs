@@ -26,6 +26,7 @@ import { homedir, hostname } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
+import { timingSafeEqual } from 'node:crypto';
 import {
   loadConfig, resolveFull, whoami, cacheLeader, DEFAULT_PORT,
 } from './cc-discover.mjs';
@@ -38,6 +39,44 @@ const HOST = process.env.CC_HOST || hostname();
 const DATA_DIR = process.env.CC_DATA_DIR || join(homedir(), '.cross-claude-mcp');
 const EPOCH_FILE = join(DATA_DIR, 'epoch');
 const DB_FILE = join(DATA_DIR, 'messages.db');
+
+// A SEPARATE admin secret (shared across the estate, like CC_TOKEN) that gates the dangerous
+// admin routes — /cc/export (full-DB download), /cc/stepdown (remote kill) and /cc/import
+// (DB overwrite). When set it is what the internal callers present and what /cc/import checks;
+// when unset, /cc/import (like the server's export/stepdown) is loopback-only, so cross-host
+// replication/migration then REQUIRE CC_ADMIN_KEY on every node.
+const ADMIN_KEY = process.env.CC_ADMIN_KEY || '';
+// Cap the /cc/import body so a runaway/abusive upload can't accumulate unboundedly in memory.
+const MAX_IMPORT_BYTES = (parseInt(process.env.CC_MAX_IMPORT_MB) || 256) * 1024 * 1024;
+
+// Constant-time comparison of the presented Authorization header against the expected
+// value. Length is guarded first (timingSafeEqual throws on unequal-length buffers);
+// behaviour is identical to === for valid/invalid tokens.
+function authMatches(presented, expected) {
+  const a = Buffer.from(String(presented));
+  const b = Buffer.from(String(expected));
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// The bearer the internal admin callers present: the admin key when set, else the chat token
+// (which the server accepts only over loopback — the no-admin-key default).
+function adminBearer(token) { return 'Bearer ' + (ADMIN_KEY || token); }
+
+function isLoopbackAddr(ip) {
+  const s = String(ip ?? '');
+  return s === '127.0.0.1' || s === '::1' || s === '::ffff:127.0.0.1' || s.startsWith('127.');
+}
+
+// Authorize an inbound /cc/import (H2, mirrored from the server's requireAdmin): the admin key
+// when set (chat token alone is refused), else loopback peers only.
+function importAuthorized(req) {
+  if (ADMIN_KEY) {
+    const auth = req.headers['authorization'] || '';
+    const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    return authMatches(bearer, ADMIN_KEY);
+  }
+  return isLoopbackAddr(req.socket?.remoteAddress || '');
+}
 
 // --- epoch sidecar (travels with the DB; monotonic authority) ---
 function readEpoch() {
@@ -85,7 +124,7 @@ async function waitFor(base, predicate, timeoutMs = 20000, everyMs = 400) {
 // image in atomically. Best-effort: any failure returns false and never disturbs the client.
 async function replicateSnapshot(leader, token) {
   try {
-    const r = await fetch(leader.base + '/cc/export', { headers: { Authorization: 'Bearer ' + token } });
+    const r = await fetch(leader.base + '/cc/export', { headers: { Authorization: adminBearer(token) } });
     if (!r.ok) return false;
     const buf = Buffer.from(await r.arrayBuffer());
     if (!buf.length) return false;
@@ -149,7 +188,7 @@ async function cmdStart() {
         log(`peer ${peer.host} epoch ${peer.epoch} outranks me (I am ${HOST} epoch ${epoch}) → stepping down to CLIENT`);
         clearInterval(monitorIv); monitorIv = null;
         steppingDown = true;
-        try { await fetch(`http://127.0.0.1:${port}/cc/stepdown`, { method: 'POST', headers: { Authorization: 'Bearer ' + token } }); } catch { try { child.kill(); } catch {} }
+        try { await fetch(`http://127.0.0.1:${port}/cc/stepdown`, { method: 'POST', headers: { Authorization: adminBearer(token) } }); } catch { try { child.kill(); } catch {} }
       }
     }, 5000);
   }
@@ -250,12 +289,31 @@ async function cmdReceive(args) {
       return;
     }
     if (req.method === 'POST' && req.url === '/cc/import') {
-      const auth = req.headers['authorization'] || '';
-      if (token && auth !== 'Bearer ' + token) { res.statusCode = 401; res.end('unauthorized'); return; }
+      // Admin-scoped (H2): CC_ADMIN_KEY when set, else loopback-only. A leaked chat token can
+      // no longer overwrite the whole bus DB from across the network.
+      if (!importAuthorized(req)) {
+        res.statusCode = ADMIN_KEY ? 401 : 403;
+        res.end(ADMIN_KEY ? 'unauthorized' : 'admin ops require loopback or CC_ADMIN_KEY');
+        return;
+      }
       const newEpoch = parseInt(req.headers['x-cc-epoch']) || (standbyEpoch + 1);
       const chunks = [];
-      req.on('data', (c) => chunks.push(c));
+      let total = 0, tooLarge = false;
+      req.on('data', (c) => {
+        if (tooLarge) return;
+        total += c.length;
+        if (total > MAX_IMPORT_BYTES) {   // bound the read — never accumulate an unbounded body
+          tooLarge = true;
+          res.statusCode = 413;
+          res.setHeader('connection', 'close');
+          res.end(JSON.stringify({ error: 'import too large', max_bytes: MAX_IMPORT_BYTES }));
+          try { req.destroy(); } catch {}
+          return;
+        }
+        chunks.push(c);
+      });
       req.on('end', () => {
+        if (tooLarge) return;
         try {
           const buf = Buffer.concat(chunks);
           mkdirSync(DATA_DIR, { recursive: true });
@@ -341,7 +399,7 @@ async function cmdMigrate(args) {
 
   // 4. export consistent snapshot from current leader
   log('exporting DB snapshot from current leader…');
-  const exp = await fetch(leader.base + '/cc/export', { headers: { Authorization: 'Bearer ' + token } });
+  const exp = await fetch(leader.base + '/cc/export', { headers: { Authorization: adminBearer(token) } });
   if (!exp.ok) { console.error(`abort: export failed ${exp.status} ${await exp.text().catch(() => '')}`); process.exit(1); }
   const dbBytes = Buffer.from(await exp.arrayBuffer());
   log(`snapshot ${dbBytes.length} bytes`);
@@ -350,7 +408,7 @@ async function cmdMigrate(args) {
   log(`importing into ${tw.host} at epoch ${newEpoch}…`);
   const imp = await fetch(targetBase + '/cc/import', {
     method: 'POST',
-    headers: { Authorization: 'Bearer ' + token, 'content-type': 'application/octet-stream', 'x-cc-epoch': String(newEpoch) },
+    headers: { Authorization: adminBearer(token), 'content-type': 'application/octet-stream', 'x-cc-epoch': String(newEpoch) },
     body: dbBytes,
   });
   if (!imp.ok) { console.error(`abort: import failed ${imp.status} ${await imp.text().catch(() => '')}`); process.exit(1); }
@@ -364,7 +422,7 @@ async function cmdMigrate(args) {
   // 7. step the old leader down (only now that the new one is confirmed)
   log('stepping old leader down…');
   try {
-    await fetch(leader.base + '/cc/stepdown', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+    await fetch(leader.base + '/cc/stepdown', { method: 'POST', headers: { Authorization: adminBearer(token) } });
   } catch (e) { log(`warning: stepdown call errored (${e.message}); the new higher-epoch leader wins regardless`); }
 
   cacheLeader(promoted);

@@ -23,10 +23,24 @@
 // dropped, never blocks a send, and the REST cursor API remains the reliability
 // backstop (the bridge replays anything missed on reconnect).
 // ---------------------------------------------------------------------------
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { addressedTo } from '../cc-render.mjs';
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+// Cap on the client->server decode buffer. The bridge only ever sends tiny control frames
+// (ping/close, <128 bytes), so a buffer that grows past this is either a stuck/oversized
+// frame or an abusive peer — we drop the connection rather than accumulate unboundedly. A
+// peer that lies about frame length (e.g. claims 10GB) never completes it, so it trips here.
+const MAX_WS_BUFFER = 1 << 20; // 1 MiB
+
+// Constant-time token comparison. Length is guarded first (timingSafeEqual throws on
+// unequal-length buffers); behaviour is identical to === for valid/invalid tokens.
+function tokensMatch(presented, expected) {
+  const a = Buffer.from(String(presented));
+  const b = Buffer.from(String(expected));
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 // --- server->client text frame (unmasked, single, unfragmented) ---
 function encodeFrame(str, opcode = 0x1) {
@@ -49,10 +63,16 @@ function encodeFrame(str, opcode = 0x1) {
 // --- incoming (client->server) frame decoder: buffers across TCP chunks, unmasks,
 // yields {opcode, payload} per complete frame. We only ACT on close (0x8) and ping
 // (0x9); data frames from the bridge are ignored (it never sends app data). ---
-function makeDecoder(onFrame) {
+function makeDecoder(onFrame, { maxBuffer = MAX_WS_BUFFER, onOverflow = () => {} } = {}) {
   let buf = Buffer.alloc(0);
+  let dead = false;
   return (chunk) => {
+    if (dead) return;
     buf = Buffer.concat([buf, chunk]);
+    if (buf.length > maxBuffer) {   // partial-frame flood / oversized frame → cut the peer off
+      dead = true; buf = Buffer.alloc(0); onOverflow();
+      return;
+    }
     // Parse as many complete frames as the buffer holds.
     for (;;) {
       if (buf.length < 2) return;
@@ -87,9 +107,25 @@ function makeDecoder(onFrame) {
   };
 }
 
+// Decide whether a browser Origin may open the socket. No Origin (Node clients — the bridge —
+// never send one) is always allowed; a present Origin must be localhost, the same host we were
+// dialed on, or explicitly allowlisted. This blocks a malicious web page from silently opening
+// a cross-origin WS to a bus reachable from the victim's browser.
+function originAllowed(origin, req, allowedOrigins) {
+  if (!origin) return true;                          // non-browser client
+  if (allowedOrigins.includes(origin)) return true;  // explicit allowlist
+  let host;
+  try { host = new URL(origin).hostname; } catch { return false; }
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.startsWith('127.')) return true;
+  const reqHost = String(req.headers.host || '').split(':')[0];
+  return !!reqHost && host === reqHost;              // same-origin
+}
+
 // Attach the hub. Returns { notify(msg), connectionCount(), identities() }.
-//   token: the shared bus token; a WS connect must present it (?token= or ?api_key=).
-export function attachWsHub(httpServer, { token, log = () => {} } = {}) {
+//   token: the shared bus token; a WS connect must present it (Authorization: Bearer <t>,
+//          or ?token=/?api_key= for browsers that cannot set handshake headers).
+//   allowedOrigins: extra browser Origins permitted beyond localhost/same-host.
+export function attachWsHub(httpServer, { token, log = () => {}, allowedOrigins = [] } = {}) {
   // identity -> Set<socket>. A box may briefly hold two (old + reconnect) — both get the push.
   const conns = new Map();
 
@@ -109,8 +145,19 @@ export function attachWsHub(httpServer, { token, log = () => {} } = {}) {
     try { url = new URL(req.url, 'http://localhost'); } catch { socket.destroy(); return; }
     if (url.pathname !== '/cc/ws') { socket.destroy(); return; }
 
-    const presented = url.searchParams.get('token') || url.searchParams.get('api_key') || '';
-    if (token && presented !== token) {
+    // Origin allowlist (M4): reject cross-origin browser upgrades before anything else.
+    if (!originAllowed(req.headers.origin, req, allowedOrigins)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // Prefer the Authorization header (Node clients keep the token OUT of the URL, H1); fall
+    // back to the query for browsers, which cannot set headers on the WS handshake.
+    const auth = req.headers['authorization'] || '';
+    const headerTok = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    const presented = headerTok || url.searchParams.get('token') || url.searchParams.get('api_key') || '';
+    if (token && !tokensMatch(presented, token)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
@@ -152,6 +199,11 @@ export function attachWsHub(httpServer, { token, log = () => {} } = {}) {
         try { socket.write(encodeFrame(payload.toString('binary'), 0xA)); } catch {}
       }
       // 0x1/0x2 (data) and 0xA (pong) ignored — the bridge sends no application data.
+    }, {
+      onOverflow: () => {                          // partial-frame flood → drop the connection
+        log(`[ws] ! ${identity} exceeded the ${MAX_WS_BUFFER}B frame buffer → closing`);
+        try { socket.destroy(); } catch {}
+      },
     });
 
     socket.on('data', (chunk) => { try { decode(chunk); } catch {} });

@@ -2,6 +2,9 @@
 node_modules/
 *.log
 
+# Per-session harness state (OMC HUD cache etc.) — holds local paths + cost data.
+.omc/
+
 # The bus connection config holds CC_TOKEN — it lives in ~/.claude/.cross-claude-bus,
 # NOT in this repo. Guard against it ever being copied in.
 .cross-claude-bus

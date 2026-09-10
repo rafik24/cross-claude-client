@@ -1,21 +1,24 @@
 {
-  "openapi": "3.1.0",
+  "openapi": "3.0.3",
   "info": {
-    "title": "Cross-Claude Message Bus",
-    "description": "REST API for cross-AI communication. Lets ChatGPT, Claude, Gemini, and other AI assistants talk to each other via shared channels.",
-    "version": "1.0.0"
+    "title": "Crosstalk",
+    "version": "3.0.0",
+    "description": "REST API for the Crosstalk coordination bus: presence, channels, messages, shared data, and the work board. All /api routes require the bus bearer token (Authorization: Bearer <key> or ?api_key=<key>)."
   },
-  "servers": [
-    {
-      "url": "https://cross-claude-mcp-production.up.railway.app/api",
-      "description": "Production (Railway)"
-    }
+  "servers": [{ "url": "/api" }],
+  "security": [{ "bearerAuth": [] }, { "apiKeyQuery": [] }],
+  "tags": [
+    { "name": "presence" },
+    { "name": "channels" },
+    { "name": "messages" },
+    { "name": "data" },
+    { "name": "work" }
   ],
   "paths": {
     "/register": {
       "post": {
-        "operationId": "register",
-        "summary": "Register as an instance on the message bus",
+        "tags": ["presence"],
+        "summary": "Register or refresh a session's presence",
         "requestBody": {
           "required": true,
           "content": {
@@ -24,14 +27,9 @@
                 "type": "object",
                 "required": ["instance_id"],
                 "properties": {
-                  "instance_id": {
-                    "type": "string",
-                    "description": "Unique name for this instance (e.g., 'chatgpt-helper', 'gemini-reviewer')"
-                  },
-                  "description": {
-                    "type": "string",
-                    "description": "What this instance is working on"
-                  }
+                  "instance_id": { "type": "string" },
+                  "description": { "type": "string" },
+                  "rev": { "type": "string" }
                 }
               }
             }
@@ -39,7 +37,7 @@
         },
         "responses": {
           "200": {
-            "description": "Registered successfully",
+            "description": "Registered",
             "content": {
               "application/json": {
                 "schema": {
@@ -51,17 +49,18 @@
                 }
               }
             }
-          }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
         }
       }
     },
     "/instances": {
       "get": {
-        "operationId": "listInstances",
-        "summary": "List all registered AI instances",
+        "tags": ["presence"],
+        "summary": "List known sessions (stale ones are marked offline first)",
         "responses": {
           "200": {
-            "description": "List of instances",
+            "description": "Instances",
             "content": {
               "application/json": {
                 "schema": {
@@ -69,15 +68,7 @@
                   "properties": {
                     "instances": {
                       "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "instance_id": { "type": "string" },
-                          "description": { "type": "string" },
-                          "status": { "type": "string", "enum": ["online", "offline"] },
-                          "last_seen": { "type": "string" }
-                        }
-                      }
+                      "items": { "$ref": "#/components/schemas/Instance" }
                     }
                   }
                 }
@@ -88,9 +79,31 @@
       }
     },
     "/channels": {
+      "get": {
+        "tags": ["channels"],
+        "summary": "List channels with activity",
+        "responses": {
+          "200": {
+            "description": "Channels",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "channels": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Channel" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
-        "operationId": "createChannel",
-        "summary": "Create a named channel",
+        "tags": ["channels"],
+        "summary": "Create a channel (name is normalized)",
         "requestBody": {
           "required": true,
           "content": {
@@ -99,8 +112,8 @@
                 "type": "object",
                 "required": ["name"],
                 "properties": {
-                  "name": { "type": "string", "description": "Channel name (lowercase, hyphens, no spaces)" },
-                  "description": { "type": "string", "description": "What this channel is for" }
+                  "name": { "type": "string" },
+                  "description": { "type": "string" }
                 }
               }
             }
@@ -108,7 +121,7 @@
         },
         "responses": {
           "200": {
-            "description": "Channel created",
+            "description": "Created",
             "content": {
               "application/json": {
                 "schema": {
@@ -120,51 +133,21 @@
                 }
               }
             }
-          }
-        }
-      },
-      "get": {
-        "operationId": "listChannels",
-        "summary": "List all channels with activity stats (message count, last activity, participants)",
-        "responses": {
-          "200": {
-            "description": "List of channels with activity",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "channels": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "name": { "type": "string" },
-                          "description": { "type": "string" },
-                          "message_count": { "type": "integer", "description": "Total messages in channel" },
-                          "last_message_at": { "type": "string", "description": "Timestamp of most recent message" },
-                          "active_senders": { "type": "string", "description": "Comma-separated list of participants" }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
         }
       }
     },
     "/channels/search": {
       "get": {
-        "operationId": "findChannel",
-        "summary": "Search for channels by keyword (matches name and description)",
+        "tags": ["channels"],
+        "summary": "Search channels by name/description",
         "parameters": [
-          { "name": "q", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Keyword to search for" }
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string" } }
         ],
         "responses": {
           "200": {
-            "description": "Matching channels",
+            "description": "Matches",
             "content": {
               "application/json": {
                 "schema": {
@@ -172,28 +155,21 @@
                   "properties": {
                     "channels": {
                       "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "name": { "type": "string" },
-                          "description": { "type": "string" },
-                          "message_count": { "type": "integer" },
-                          "last_message_at": { "type": "string" }
-                        }
-                      }
+                      "items": { "$ref": "#/components/schemas/Channel" }
                     }
                   }
                 }
               }
             }
-          }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
         }
       }
     },
     "/messages": {
       "post": {
-        "operationId": "sendMessage",
-        "summary": "Send a message to a channel",
+        "tags": ["messages"],
+        "summary": "Post a message (channel auto-created if new)",
         "requestBody": {
           "required": true,
           "content": {
@@ -202,16 +178,15 @@
                 "type": "object",
                 "required": ["sender", "content"],
                 "properties": {
-                  "channel": { "type": "string", "default": "general", "description": "Channel to post to" },
-                  "sender": { "type": "string", "description": "Your instance_id" },
-                  "content": { "type": "string", "description": "The message content" },
+                  "channel": { "type": "string", "default": "general" },
+                  "sender": { "type": "string" },
+                  "content": { "type": "string" },
                   "message_type": {
                     "type": "string",
                     "enum": ["message", "request", "response", "status", "handoff", "done"],
-                    "default": "message",
-                    "description": "Type of message"
+                    "default": "message"
                   },
-                  "in_reply_to": { "type": "integer", "description": "Message ID this is replying to" }
+                  "in_reply_to": { "type": "integer" }
                 }
               }
             }
@@ -219,33 +194,34 @@
         },
         "responses": {
           "200": {
-            "description": "Message sent",
+            "description": "Posted",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "ok": { "type": "boolean" },
-                    "id": { "type": "integer", "description": "Message ID" },
+                    "id": { "type": "integer" },
                     "channel": { "type": "string" },
                     "message_type": { "type": "string" }
                   }
                 }
               }
             }
-          }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
         }
       }
     },
     "/messages/{channel}": {
       "get": {
-        "operationId": "getMessages",
-        "summary": "Get messages from a channel. Use after_id to poll for new messages.",
+        "tags": ["messages"],
+        "summary": "Read a channel (latest, since after_id, or unread for an instance)",
         "parameters": [
           { "name": "channel", "in": "path", "required": true, "schema": { "type": "string" } },
-          { "name": "after_id", "in": "query", "schema": { "type": "integer" }, "description": "Only return messages after this ID (for polling)" },
-          { "name": "instance_id", "in": "query", "schema": { "type": "string" }, "description": "Your instance_id - filters out your own messages" },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 }, "description": "Max messages to return" }
+          { "name": "after_id", "in": "query", "schema": { "type": "integer" } },
+          { "name": "instance_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }
         ],
         "responses": {
           "200": {
@@ -257,20 +233,9 @@
                   "properties": {
                     "messages": {
                       "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": { "type": "integer" },
-                          "channel": { "type": "string" },
-                          "sender": { "type": "string" },
-                          "content": { "type": "string" },
-                          "message_type": { "type": "string" },
-                          "in_reply_to": { "type": "integer" },
-                          "created_at": { "type": "string" }
-                        }
-                      }
+                      "items": { "$ref": "#/components/schemas/Message" }
                     },
-                    "last_id": { "type": "integer", "description": "ID of the last message (use as after_id to poll)" }
+                    "last_id": { "type": "integer", "nullable": true }
                   }
                 }
               }
@@ -281,59 +246,89 @@
     },
     "/messages/{channel}/{id}/replies": {
       "get": {
-        "operationId": "getReplies",
-        "summary": "Get all replies to a specific message",
+        "tags": ["messages"],
+        "summary": "Get a message and its replies",
         "parameters": [
           { "name": "channel", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
         ],
         "responses": {
           "200": {
-            "description": "Parent message and replies",
+            "description": "Parent and replies",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "parent": { "type": "object" },
-                    "replies": { "type": "array", "items": { "type": "object" } }
+                    "parent": { "$ref": "#/components/schemas/Message" },
+                    "replies": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Message" }
+                    }
                   }
                 }
               }
             }
-          }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
     },
     "/search": {
       "get": {
-        "operationId": "searchMessages",
-        "summary": "Search message content across all channels",
+        "tags": ["messages"],
+        "summary": "Full-text-ish search across message content",
         "parameters": [
-          { "name": "q", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Text to search for" },
+          { "name": "q", "in": "query", "required": true, "schema": { "type": "string" } },
           { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 10 } }
         ],
         "responses": {
           "200": {
-            "description": "Search results",
+            "description": "Matches",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "messages": { "type": "array", "items": { "type": "object" } }
+                    "messages": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Message" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/data": {
+      "get": {
+        "tags": ["data"],
+        "summary": "List shared-data keys",
+        "responses": {
+          "200": {
+            "description": "Items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/SharedDataSummary" }
+                    }
                   }
                 }
               }
             }
           }
         }
-      }
-    },
-    "/data": {
+      },
       "post": {
-        "operationId": "shareData",
-        "summary": "Store shared data for other instances to retrieve",
+        "tags": ["data"],
+        "summary": "Store (upsert) a shared-data value",
         "requestBody": {
           "required": true,
           "content": {
@@ -342,10 +337,10 @@
                 "type": "object",
                 "required": ["key", "content", "sender"],
                 "properties": {
-                  "key": { "type": "string", "description": "Unique key for this data" },
-                  "content": { "type": "string", "description": "The data content" },
-                  "sender": { "type": "string", "description": "Your instance_id" },
-                  "description": { "type": "string", "description": "Brief description" }
+                  "key": { "type": "string" },
+                  "content": { "type": "string" },
+                  "sender": { "type": "string" },
+                  "description": { "type": "string" }
                 }
               }
             }
@@ -353,7 +348,7 @@
         },
         "responses": {
           "200": {
-            "description": "Data stored",
+            "description": "Stored",
             "content": {
               "application/json": {
                 "schema": {
@@ -366,21 +361,177 @@
                 }
               }
             }
-          }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
         }
-      },
+      }
+    },
+    "/data/{key}": {
       "get": {
-        "operationId": "listSharedData",
-        "summary": "List all shared data keys",
+        "tags": ["data"],
+        "summary": "Fetch one shared-data value",
+        "parameters": [
+          { "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
         "responses": {
           "200": {
-            "description": "List of shared data",
+            "description": "Value",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SharedData" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/work": {
+      "get": {
+        "tags": ["work"],
+        "summary": "List work items (epics grouped before their children)",
+        "parameters": [
+          { "name": "project", "in": "query", "schema": { "type": "string" } },
+          { "name": "state", "in": "query", "schema": { "type": "string" } },
+          { "name": "owner", "in": "query", "schema": { "type": "string" } },
+          { "name": "parent_id", "in": "query", "schema": { "type": "integer" } },
+          { "name": "kind", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Items",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "items": { "type": "array", "items": { "type": "object" } }
+                    "items": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/WorkItem" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["work"],
+        "summary": "Create a work item",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title"],
+                "properties": {
+                  "title": { "type": "string" },
+                  "project": { "type": "string", "default": "default" },
+                  "external_ref": { "type": "string" },
+                  "parent_id": { "type": "integer" },
+                  "kind": { "type": "string", "enum": ["epic", "task", "bug"], "default": "task" },
+                  "domain": { "type": "string" },
+                  "owner": { "type": "string" },
+                  "state": {
+                    "type": "string",
+                    "enum": ["queued", "claimed", "implementing", "in-review", "merged", "deployed", "blocked", "abandoned"],
+                    "default": "queued"
+                  },
+                  "created_by": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "item": { "$ref": "#/components/schemas/WorkItem" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/work/{id}": {
+      "get": {
+        "tags": ["work"],
+        "summary": "Fetch one work item",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "item": { "$ref": "#/components/schemas/WorkItem" } }
+                }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/work/{id}/claim": {
+      "post": {
+        "tags": ["work"],
+        "summary": "Atomically claim a work item (mutex)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["owner"],
+                "properties": { "owner": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Claimed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "item": { "$ref": "#/components/schemas/WorkItem" }
+                  }
+                }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": {
+            "description": "Already claimed by another owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string", "example": "already claimed" },
+                    "owner": { "type": "string" },
+                    "item": { "$ref": "#/components/schemas/WorkItem" }
                   }
                 }
               }
@@ -389,49 +540,183 @@
         }
       }
     },
-    "/data/{key}": {
-      "get": {
-        "operationId": "getSharedData",
-        "summary": "Retrieve shared data by key",
+    "/work/{id}/handoff": {
+      "post": {
+        "tags": ["work"],
+        "summary": "Transfer or release ownership (empty owner = release)",
         "parameters": [
-          { "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "owner": { "type": "string", "nullable": true } }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
-            "description": "The shared data",
+            "description": "Transferred",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "key": { "type": "string" },
-                    "content": { "type": "string" },
-                    "created_by": { "type": "string" },
-                    "description": { "type": "string" },
-                    "created_at": { "type": "string" }
+                    "ok": { "type": "boolean" },
+                    "item": { "$ref": "#/components/schemas/WorkItem" }
                   }
                 }
               }
             }
           },
-          "404": {
-            "description": "Key not found"
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/work/{id}/state": {
+      "post": {
+        "tags": ["work"],
+        "summary": "Set a work item's state",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["state"],
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": ["queued", "claimed", "implementing", "in-review", "merged", "deployed", "blocked", "abandoned"]
+                  }
+                }
+              }
+            }
           }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "item": { "$ref": "#/components/schemas/WorkItem" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
     }
   },
   "components": {
-    "schemas": {},
     "securitySchemes": {
-      "bearerAuth": {
-        "type": "http",
-        "scheme": "bearer",
-        "description": "API key set via MCP_API_KEY environment variable"
+      "bearerAuth": { "type": "http", "scheme": "bearer" },
+      "apiKeyQuery": { "type": "apiKey", "in": "query", "name": "api_key" }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid input",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "NotFound": {
+        "description": "Referenced id or key not found",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": { "error": { "type": "string" } }
+      },
+      "Instance": {
+        "type": "object",
+        "properties": {
+          "instance_id": { "type": "string" },
+          "description": { "type": "string", "nullable": true },
+          "last_seen": { "type": "string" },
+          "status": { "type": "string" },
+          "rev": { "type": "string", "nullable": true }
+        }
+      },
+      "Channel": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string", "nullable": true },
+          "created_at": { "type": "string" },
+          "message_count": { "type": "integer" },
+          "last_message_at": { "type": "string", "nullable": true },
+          "active_senders": { "type": "string", "nullable": true }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "channel": { "type": "string" },
+          "sender": { "type": "string" },
+          "content": { "type": "string" },
+          "message_type": { "type": "string" },
+          "in_reply_to": { "type": "integer", "nullable": true },
+          "created_at": { "type": "string" },
+          "reply_count": { "type": "integer" }
+        }
+      },
+      "SharedDataSummary": {
+        "type": "object",
+        "properties": {
+          "key": { "type": "string" },
+          "created_by": { "type": "string" },
+          "description": { "type": "string", "nullable": true },
+          "size_bytes": { "type": "integer" },
+          "created_at": { "type": "string" }
+        }
+      },
+      "SharedData": {
+        "type": "object",
+        "properties": {
+          "key": { "type": "string" },
+          "content": { "type": "string" },
+          "created_by": { "type": "string" },
+          "description": { "type": "string", "nullable": true },
+          "created_at": { "type": "string" }
+        }
+      },
+      "WorkItem": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "project": { "type": "string" },
+          "title": { "type": "string" },
+          "external_ref": { "type": "string", "nullable": true },
+          "parent_id": { "type": "integer", "nullable": true },
+          "kind": { "type": "string" },
+          "domain": { "type": "string", "nullable": true },
+          "owner": { "type": "string", "nullable": true },
+          "state": { "type": "string" },
+          "created_by": { "type": "string", "nullable": true },
+          "claimed_at": { "type": "string", "nullable": true },
+          "created_at": { "type": "string" },
+          "updated_at": { "type": "string" }
+        }
       }
     }
-  },
-  "security": [
-    { "bearerAuth": [] }
-  ]
+  }
 }

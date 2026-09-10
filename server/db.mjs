@@ -1,603 +1,550 @@
-/**
- * Database abstraction layer.
- * Uses SQLite locally, PostgreSQL on Railway (when DATABASE_URL is set).
- */
+// db.mjs — Crosstalk storage layer. SQLite-only.
+//
+// One db object backed by SQLite via better-sqlite3, file at
+// ${CC_DATA_DIR||~/.cross-claude-mcp}/messages.db.
+//
+// The backend is hidden behind a small "adapter" whose query methods are ALWAYS async.
+// The underlying better-sqlite3 calls are synchronous, so we just wrap their results in
+// resolved promises; every db method below awaits the adapter, so callers already `await`
+// everything and the async surface stays stable.
+//
+// SQL-injection safety: user-supplied values are ALWAYS passed as bound parameters (`?`),
+// never interpolated into the SQL text. The only things interpolated are internal, trusted
+// SQL fragments (SQL keywords, column names, and fixed retention amounts).
 
-const SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS channels (
-    name TEXT PRIMARY KEY,
-    description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  );
+import Database from 'better-sqlite3';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
 
-  CREATE TABLE IF NOT EXISTS messages (
-    id SERIAL PRIMARY KEY,
-    channel TEXT NOT NULL REFERENCES channels(name),
-    sender TEXT NOT NULL,
-    content TEXT NOT NULL,
-    message_type TEXT DEFAULT 'message',
-    in_reply_to INTEGER REFERENCES messages(id),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  );
+// ── Public constants ────────────────────────────────────────────────────────
 
-  CREATE TABLE IF NOT EXISTS instances (
-    instance_id TEXT PRIMARY KEY,
-    description TEXT,
-    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status TEXT DEFAULT 'online',
-    session_token TEXT,
-    rev TEXT
-  );
+// Lifecycle a work item moves through on the board.
+export const WORK_STATES = [
+  'queued',
+  'claimed',
+  'implementing',
+  'in-review',
+  'merged',
+  'deployed',
+  'blocked',
+  'abandoned',
+];
 
-  CREATE TABLE IF NOT EXISTS shared_data (
-    key TEXT PRIMARY KEY,
-    content TEXT NOT NULL,
-    created_by TEXT NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS invite_codes (
-    code TEXT PRIMARY KEY,
-    label TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    used_at TIMESTAMP,
-    used_by TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS read_cursors (
-    channel TEXT NOT NULL,
-    instance_id TEXT NOT NULL,
-    last_read_id INTEGER NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (channel, instance_id)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_read_cursors_updated ON read_cursors(updated_at);
-`;
-
-const INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel);
-  CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender);
-  CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
-`;
-
-// Migration: add session_token column to existing instances tables
-const MIGRATION_SESSION_TOKEN_PG = `ALTER TABLE instances ADD COLUMN IF NOT EXISTS session_token TEXT`;
-const MIGRATION_SESSION_TOKEN_SQLITE = `ALTER TABLE instances ADD COLUMN session_token TEXT`;
-// Migration: add the running-code revision column to existing instances tables.
-const MIGRATION_REV_PG = `ALTER TABLE instances ADD COLUMN IF NOT EXISTS rev TEXT`;
-const MIGRATION_REV_SQLITE = `ALTER TABLE instances ADD COLUMN rev TEXT`;
+// The three shapes of work we track.
+export const WORK_KINDS = ['epic', 'task', 'bug'];
 
 /**
- * Normalize channel names: lowercase, replace spaces/underscores with hyphens,
- * strip non-alphanumeric (except hyphens), collapse multiple hyphens.
+ * Reduce an arbitrary channel label to a safe slug:
+ *   lowercase → spaces/underscores become dashes → drop anything outside [a-z0-9-]
+ *   → collapse runs of dashes → trim leading/trailing dashes.
+ * e.g. "  Hello World_Foo!! " → "hello-world-foo"
  */
 export function normalizeChannelName(name) {
-  return name
+  return String(name ?? '')
     .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/[^a-z0-9-]/g, "")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-|-$/g, "");
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
-const SEED_SQL = `INSERT INTO channels (name, description) VALUES ('general', 'Default channel for cross-instance communication') ON CONFLICT (name) DO NOTHING`;
+// ── Backend adapter ─────────────────────────────────────────────────────────
+//
+// The adapter exposes:
+//   raw                             underlying handle (used by tests + snapshot)
+//   now                             SQL expression for "current timestamp"
+//   maxOf(a, b)                     scalar max of two values
+//   sendersCsv(col)                 distinct comma-joined aggregate of a column
+//   olderThan(col, amount, unit)    -> { clause, params } comparing col against now-<amount unit>
+//   all / get / run / insert        async query helpers ('?' placeholders)
+//   exec(sql)                       run DDL (possibly multiple statements)
+//   snapshot(dest) / close()
 
-// --- SQLite Implementation ---
+// Convert `undefined` binds to `null` — better-sqlite3 rejects undefined outright.
+const cleanParams = (params) => (params ?? []).map((p) => (p === undefined ? null : p));
 
-class SqliteDB {
-  constructor(dbPath) {
-    this.dbPath = dbPath;
-    this.db = null;
-  }
-
-  async init(Database) {
-    this.db = new Database(this.dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("foreign_keys = ON");
-    const sqliteSchema = SCHEMA_SQL.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
-      .replace(/TIMESTAMP DEFAULT CURRENT_TIMESTAMP/g, "TEXT DEFAULT (datetime('now'))");
-    this.db.exec(sqliteSchema);
-    this.db.exec(INDEX_SQL);
-    // Migration: add session_token if missing (existing databases)
-    try { this.db.exec(MIGRATION_SESSION_TOKEN_SQLITE); } catch { /* column already exists */ }
-    // Migration: add rev (running-code revision) if missing
-    try { this.db.exec(MIGRATION_REV_SQLITE); } catch { /* column already exists */ }
-    this.db.prepare(`INSERT OR IGNORE INTO channels (name, description) VALUES ('general', 'Default channel for cross-instance communication')`).run();
-  }
-
-  // Consistent online snapshot of the live DB to destPath — used by /cc/export during
-  // migration. better-sqlite3's backup API copies a transactionally-consistent image even
-  // while the bus keeps serving writes (no need to quiesce). Returns destPath.
-  async snapshot(destPath) {
-    await this.db.backup(destPath);
-    return destPath;
-  }
-
-  getInstance(instanceId) {
-    return this.db.prepare(`SELECT * FROM instances WHERE instance_id = ?`).get(instanceId);
-  }
-
-  registerInstance(instanceId, description, sessionToken, rev = null) {
-    this.db.prepare(
-      `INSERT INTO instances (instance_id, description, last_seen, status, session_token, rev)
-       VALUES (?, ?, datetime('now'), 'online', ?, ?)
-       ON CONFLICT(instance_id) DO UPDATE SET
-         description = excluded.description,
-         last_seen = datetime('now'),
-         status = 'online',
-         session_token = excluded.session_token,
-         rev = COALESCE(excluded.rev, instances.rev)`
-    ).run(instanceId, description, sessionToken, rev);
-  }
-
-  heartbeat(instanceId) {
-    this.db.prepare(
-      `UPDATE instances SET last_seen = datetime('now'), status = 'online' WHERE instance_id = ?`
-    ).run(instanceId);
-  }
-
-  markOffline(instanceId) {
-    try {
-      this.db.prepare(`UPDATE instances SET status = 'offline' WHERE instance_id = ?`).run(instanceId);
-    } catch { /* DB may be closed during shutdown */ }
-  }
-
-  markStaleOffline(thresholdSeconds) {
-    this.db.prepare(
-      `UPDATE instances SET status = 'offline'
-       WHERE status = 'online'
-         AND last_seen < datetime('now', '-' || ? || ' seconds')`
-    ).run(thresholdSeconds);
-  }
-
-  createChannel(name, description) {
-    this.db.prepare(`INSERT OR IGNORE INTO channels (name, description) VALUES (?, ?)`).run(name, description);
-  }
-
-  listChannels() {
-    return this.db.prepare(`SELECT * FROM channels ORDER BY name`).all();
-  }
-
-  listChannelsWithActivity() {
-    return this.db.prepare(`
-      SELECT c.*,
-        COALESCE(s.message_count, 0) as message_count,
-        s.last_message_at,
-        s.active_senders
-      FROM channels c
-      LEFT JOIN (
-        SELECT channel,
-          COUNT(*) as message_count,
-          MAX(created_at) as last_message_at,
-          GROUP_CONCAT(DISTINCT sender) as active_senders
-        FROM messages
-        GROUP BY channel
-      ) s ON c.name = s.channel
-      ORDER BY s.last_message_at DESC NULLS LAST, c.name
-    `).all();
-  }
-
-  findChannels(query) {
-    const pattern = `%${query}%`;
-    return this.db.prepare(`
-      SELECT c.*,
-        COALESCE(s.message_count, 0) as message_count,
-        s.last_message_at
-      FROM channels c
-      LEFT JOIN (
-        SELECT channel, COUNT(*) as message_count, MAX(created_at) as last_message_at
-        FROM messages GROUP BY channel
-      ) s ON c.name = s.channel
-      WHERE c.name LIKE ? OR c.description LIKE ?
-      ORDER BY s.last_message_at DESC NULLS LAST
-    `).all(pattern, pattern);
-  }
-
-  sendMessage(channel, sender, content, messageType, inReplyTo) {
-    const result = this.db.prepare(
-      `INSERT INTO messages (channel, sender, content, message_type, in_reply_to) VALUES (?, ?, ?, ?, ?)`
-    ).run(channel, sender, content, messageType, inReplyTo);
-    return result.lastInsertRowid;
-  }
-
-  getMessages(channel, limit) {
-    return this.db.prepare(
-      `SELECT m.*, (SELECT COUNT(*) FROM messages r WHERE r.in_reply_to = m.id) as reply_count
-       FROM messages m WHERE m.channel = ? ORDER BY m.created_at DESC LIMIT ?`
-    ).all(channel, limit);
-  }
-
-  getMessagesSince(channel, afterId) {
-    return this.db.prepare(
-      `SELECT m.*, (SELECT COUNT(*) FROM messages r WHERE r.in_reply_to = m.id) as reply_count
-       FROM messages m WHERE m.channel = ? AND m.id > ? ORDER BY m.created_at ASC`
-    ).all(channel, afterId);
-  }
-
-  getUnread(channel, afterId, instanceId) {
-    return this.db.prepare(
-      `SELECT m.*, (SELECT COUNT(*) FROM messages r WHERE r.in_reply_to = m.id) as reply_count
-       FROM messages m WHERE m.channel = ? AND m.id > ? AND m.sender != ? ORDER BY m.created_at ASC`
-    ).all(channel, afterId, instanceId);
-  }
-
-  getMessage(id) {
-    return this.db.prepare(`SELECT * FROM messages WHERE id = ?`).get(id);
-  }
-
-  getReplies(messageId) {
-    return this.db.prepare(`SELECT * FROM messages WHERE in_reply_to = ? ORDER BY created_at ASC`).all(messageId);
-  }
-
-  getReadCursor(channel, instanceId) {
-    const result = this.db.prepare(
-      `SELECT last_read_id FROM read_cursors WHERE channel = ? AND instance_id = ?`
-    ).get(channel, instanceId);
-    return result ? result.last_read_id : undefined;
-  }
-
-  setReadCursor(channel, instanceId, lastReadId) {
-    // Monotonic upsert: never regress to a lower id
-    this.db.prepare(`
-      INSERT INTO read_cursors (channel, instance_id, last_read_id, updated_at)
-      VALUES (?, ?, ?, datetime('now'))
-      ON CONFLICT(channel, instance_id) DO UPDATE SET
-        last_read_id = max(read_cursors.last_read_id, excluded.last_read_id),
-        updated_at = datetime('now')
-      WHERE excluded.last_read_id >= read_cursors.last_read_id
-    `).run(channel, instanceId, lastReadId);
-  }
-
-  listInstances() {
-    return this.db.prepare(`SELECT * FROM instances ORDER BY last_seen DESC`).all();
-  }
-
-  searchMessages(query, limit) {
-    return this.db.prepare(
-      `SELECT m.*, (SELECT COUNT(*) FROM messages r WHERE r.in_reply_to = m.id) as reply_count
-       FROM messages m WHERE m.content LIKE ? ORDER BY m.created_at DESC LIMIT ?`
-    ).all(`%${query}%`, limit);
-  }
-
-  shareData(key, content, createdBy, description) {
-    this.db.prepare(
-      `INSERT INTO shared_data (key, content, created_by, description, created_at)
-       VALUES (?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(key) DO UPDATE SET
-         content = excluded.content,
-         created_by = excluded.created_by,
-         description = excluded.description,
-         created_at = datetime('now')`
-    ).run(key, content, createdBy, description);
-  }
-
-  getSharedData(key) {
-    return this.db.prepare(`SELECT * FROM shared_data WHERE key = ?`).get(key);
-  }
-
-  listSharedData() {
-    return this.db.prepare(
-      `SELECT key, created_by, description, length(content) as size_bytes, created_at FROM shared_data ORDER BY created_at DESC`
-    ).all();
-  }
-
-  deleteSharedData(key) {
-    this.db.prepare(`DELETE FROM shared_data WHERE key = ?`).run(key);
-  }
-
-  cleanup(maxAgeDays = 7) {
-    const interval = `-${maxAgeDays} days`;
-    const msgs = this.db.prepare(`DELETE FROM messages WHERE created_at < datetime('now', ?)`).run(interval);
-    const inst = this.db.prepare(`DELETE FROM instances WHERE last_seen < datetime('now', ?)`).run(interval);
-    const data = this.db.prepare(`DELETE FROM shared_data WHERE created_at < datetime('now', ?)`).run(interval);
-    // Opportunistic cleanup: purge read_cursors older than 30 days (independent of maxAgeDays)
-    const cursors = this.db.prepare(`DELETE FROM read_cursors WHERE updated_at < datetime('now', '-30 days')`).run();
-    return { messages: msgs.changes, instances: inst.changes, shared_data: data.changes, read_cursors: cursors.changes };
-  }
-
-  purgeAll() {
-    this.db.prepare(`DELETE FROM messages`).run();
-    this.db.prepare(`DELETE FROM instances`).run();
-    this.db.prepare(`DELETE FROM shared_data`).run();
-  }
-
-  createInviteCode(code, label) {
-    this.db.prepare(`INSERT INTO invite_codes (code, label) VALUES (?, ?)`).run(code, label);
-  }
-
-  redeemInviteCode(code) {
-    const row = this.db.prepare(`SELECT * FROM invite_codes WHERE code = ?`).get(code);
-    if (!row) return null;
-    if (row.used_at) return null;
-    this.db.prepare(`UPDATE invite_codes SET used_at = datetime('now'), used_by = 'oauth' WHERE code = ?`).run(code);
-    return row;
-  }
-
-  listInviteCodes() {
-    return this.db.prepare(`SELECT * FROM invite_codes ORDER BY created_at DESC`).all();
-  }
+function makeSqliteAdapter(handle) {
+  return {
+    raw: handle,
+    now: "datetime('now')",
+    maxOf: (a, b) => `max(${a}, ${b})`,
+    sendersCsv: (col) => `group_concat(DISTINCT ${col})`,
+    olderThan(col, amount, unit) {
+      // The retention amount rides as a bound modifier string ("-7 days"); unit is trusted.
+      return { clause: `${col} < datetime('now', ?)`, params: [`-${amount} ${unit}`] };
+    },
+    async all(sql, params) {
+      return handle.prepare(sql).all(...cleanParams(params));
+    },
+    async get(sql, params) {
+      return handle.prepare(sql).get(...cleanParams(params));
+    },
+    async run(sql, params) {
+      const info = handle.prepare(sql).run(...cleanParams(params));
+      return { changes: info.changes, lastId: Number(info.lastInsertRowid) };
+    },
+    async insert(sql, params) {
+      const info = handle.prepare(sql).run(...cleanParams(params));
+      return Number(info.lastInsertRowid);
+    },
+    async exec(sql) {
+      handle.exec(sql);
+    },
+    async snapshot(dest) {
+      // better-sqlite3's online backup — safe to call while the WAL is live.
+      await handle.backup(dest);
+    },
+    async close() {
+      handle.close();
+    },
+  };
 }
 
-// --- PostgreSQL Implementation ---
+// ── Schema ──────────────────────────────────────────────────────────────────
 
-class PostgresDB {
-  constructor(connectionString) {
-    this.connectionString = connectionString;
-    this.pool = null;
-  }
+function schemaStatements() {
+  const pk = 'INTEGER PRIMARY KEY AUTOINCREMENT';
+  const ts = "TEXT DEFAULT (datetime('now'))";
+  const tsNullable = 'TEXT'; // for columns with no default (claimed_at)
 
-  async init(pg) {
-    this.pool = new pg.Pool({
-      connectionString: this.connectionString,
-      max: 5,
-      idleTimeoutMillis: 30000,
-    });
-    await this.pool.query(SCHEMA_SQL);
-    await this.pool.query(INDEX_SQL);
-    await this.pool.query(SEED_SQL);
-    // Migration: add session_token if missing (existing databases)
-    await this.pool.query(MIGRATION_SESSION_TOKEN_PG).catch(() => {});
-    await this.pool.query(MIGRATION_REV_PG).catch(() => {});
-  }
-
-  async getInstance(instanceId) {
-    const result = await this.pool.query(`SELECT * FROM instances WHERE instance_id = $1`, [instanceId]);
-    return result.rows[0] || null;
-  }
-
-  async registerInstance(instanceId, description, sessionToken, rev = null) {
-    await this.pool.query(
-      `INSERT INTO instances (instance_id, description, last_seen, status, session_token, rev)
-       VALUES ($1, $2, NOW(), 'online', $3, $4)
-       ON CONFLICT(instance_id) DO UPDATE SET
-         description = EXCLUDED.description,
-         last_seen = NOW(),
-         status = 'online',
-         session_token = EXCLUDED.session_token,
-         rev = COALESCE(EXCLUDED.rev, instances.rev)`,
-      [instanceId, description, sessionToken, rev]
-    );
-  }
-
-  async heartbeat(instanceId) {
-    await this.pool.query(
-      `UPDATE instances SET last_seen = NOW(), status = 'online' WHERE instance_id = $1`,
-      [instanceId]
-    );
-  }
-
-  async markOffline(instanceId) {
-    try {
-      await this.pool.query(`UPDATE instances SET status = 'offline' WHERE instance_id = $1`, [instanceId]);
-    } catch { /* ignore */ }
-  }
-
-  async markStaleOffline(thresholdSeconds) {
-    await this.pool.query(
-      `UPDATE instances SET status = 'offline'
-       WHERE status = 'online'
-         AND last_seen < NOW() - INTERVAL '1 second' * $1`,
-      [thresholdSeconds]
-    );
-  }
-
-  async createChannel(name, description) {
-    await this.pool.query(
-      `INSERT INTO channels (name, description) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING`,
-      [name, description]
-    );
-  }
-
-  async listChannels() {
-    const result = await this.pool.query(`SELECT * FROM channels ORDER BY name`);
-    return result.rows;
-  }
-
-  async listChannelsWithActivity() {
-    const result = await this.pool.query(`
-      SELECT c.*,
-        COALESCE(s.message_count, 0)::int as message_count,
-        s.last_message_at,
-        s.active_senders
-      FROM channels c
-      LEFT JOIN (
-        SELECT channel,
-          COUNT(*)::int as message_count,
-          MAX(created_at) as last_message_at,
-          STRING_AGG(DISTINCT sender, ', ') as active_senders
-        FROM messages
-        GROUP BY channel
-      ) s ON c.name = s.channel
-      ORDER BY s.last_message_at DESC NULLS LAST, c.name
-    `);
-    return result.rows;
-  }
-
-  async findChannels(query) {
-    const pattern = `%${query}%`;
-    const result = await this.pool.query(`
-      SELECT c.*,
-        COALESCE(s.message_count, 0)::int as message_count,
-        s.last_message_at
-      FROM channels c
-      LEFT JOIN (
-        SELECT channel, COUNT(*)::int as message_count, MAX(created_at) as last_message_at
-        FROM messages GROUP BY channel
-      ) s ON c.name = s.channel
-      WHERE c.name ILIKE $1 OR c.description ILIKE $1
-      ORDER BY s.last_message_at DESC NULLS LAST
-    `, [pattern]);
-    return result.rows;
-  }
-
-  async sendMessage(channel, sender, content, messageType, inReplyTo) {
-    const result = await this.pool.query(
-      `INSERT INTO messages (channel, sender, content, message_type, in_reply_to) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      [channel, sender, content, messageType, inReplyTo]
-    );
-    return result.rows[0].id;
-  }
-
-  async getMessages(channel, limit) {
-    const result = await this.pool.query(
-      `SELECT m.*, (SELECT COUNT(*)::int FROM messages r WHERE r.in_reply_to = m.id) as reply_count
-       FROM messages m WHERE m.channel = $1 ORDER BY m.created_at DESC LIMIT $2`,
-      [channel, limit]
-    );
-    return result.rows;
-  }
-
-  async getMessagesSince(channel, afterId) {
-    const result = await this.pool.query(
-      `SELECT m.*, (SELECT COUNT(*)::int FROM messages r WHERE r.in_reply_to = m.id) as reply_count
-       FROM messages m WHERE m.channel = $1 AND m.id > $2 ORDER BY m.created_at ASC`,
-      [channel, afterId]
-    );
-    return result.rows;
-  }
-
-  async getUnread(channel, afterId, instanceId) {
-    const result = await this.pool.query(
-      `SELECT m.*, (SELECT COUNT(*)::int FROM messages r WHERE r.in_reply_to = m.id) as reply_count
-       FROM messages m WHERE m.channel = $1 AND m.id > $2 AND m.sender != $3 ORDER BY m.created_at ASC`,
-      [channel, afterId, instanceId]
-    );
-    return result.rows;
-  }
-
-  async getMessage(id) {
-    const result = await this.pool.query(`SELECT * FROM messages WHERE id = $1`, [id]);
-    return result.rows[0] || null;
-  }
-
-  async getReplies(messageId) {
-    const result = await this.pool.query(
-      `SELECT * FROM messages WHERE in_reply_to = $1 ORDER BY created_at ASC`,
-      [messageId]
-    );
-    return result.rows;
-  }
-
-  async getReadCursor(channel, instanceId) {
-    const result = await this.pool.query(
-      `SELECT last_read_id FROM read_cursors WHERE channel = $1 AND instance_id = $2`,
-      [channel, instanceId]
-    );
-    return result.rows[0]?.last_read_id;
-  }
-
-  async setReadCursor(channel, instanceId, lastReadId) {
-    // Monotonic upsert: never regress to a lower id
-    await this.pool.query(`
-      INSERT INTO read_cursors (channel, instance_id, last_read_id, updated_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT(channel, instance_id) DO UPDATE SET
-        last_read_id = GREATEST(read_cursors.last_read_id, EXCLUDED.last_read_id),
-        updated_at = NOW()
-    `, [channel, instanceId, lastReadId]);
-  }
-
-  async listInstances() {
-    const result = await this.pool.query(`SELECT * FROM instances ORDER BY last_seen DESC`);
-    return result.rows;
-  }
-
-  async searchMessages(query, limit) {
-    const result = await this.pool.query(
-      `SELECT m.*, (SELECT COUNT(*)::int FROM messages r WHERE r.in_reply_to = m.id) as reply_count
-       FROM messages m WHERE m.content ILIKE $1 ORDER BY m.created_at DESC LIMIT $2`,
-      [`%${query}%`, limit]
-    );
-    return result.rows;
-  }
-
-  async shareData(key, content, createdBy, description) {
-    await this.pool.query(
-      `INSERT INTO shared_data (key, content, created_by, description)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT(key) DO UPDATE SET
-         content = EXCLUDED.content,
-         created_by = EXCLUDED.created_by,
-         description = EXCLUDED.description,
-         created_at = NOW()`,
-      [key, content, createdBy, description]
-    );
-  }
-
-  async getSharedData(key) {
-    const result = await this.pool.query(`SELECT * FROM shared_data WHERE key = $1`, [key]);
-    return result.rows[0] || null;
-  }
-
-  async listSharedData() {
-    const result = await this.pool.query(
-      `SELECT key, created_by, description, length(content) as size_bytes, created_at FROM shared_data ORDER BY created_at DESC`
-    );
-    return result.rows;
-  }
-
-  async deleteSharedData(key) {
-    await this.pool.query(`DELETE FROM shared_data WHERE key = $1`, [key]);
-  }
-
-  async cleanup(maxAgeDays = 7) {
-    const interval = `${maxAgeDays} days`;
-    const msgs = await this.pool.query(`DELETE FROM messages WHERE created_at < NOW() - INTERVAL '1 day' * $1`, [maxAgeDays]);
-    const inst = await this.pool.query(`DELETE FROM instances WHERE last_seen < NOW() - INTERVAL '1 day' * $1`, [maxAgeDays]);
-    const data = await this.pool.query(`DELETE FROM shared_data WHERE created_at < NOW() - INTERVAL '1 day' * $1`, [maxAgeDays]);
-    // Opportunistic cleanup: purge read_cursors older than 30 days (independent of maxAgeDays)
-    const cursors = await this.pool.query(`DELETE FROM read_cursors WHERE updated_at < NOW() - INTERVAL '30 days'`);
-    return { messages: msgs.rowCount, instances: inst.rowCount, shared_data: data.rowCount, read_cursors: cursors.rowCount };
-  }
-
-  async purgeAll() {
-    await this.pool.query(`DELETE FROM messages`);
-    await this.pool.query(`DELETE FROM instances`);
-    await this.pool.query(`DELETE FROM shared_data`);
-  }
-
-  async createInviteCode(code, label) {
-    await this.pool.query(`INSERT INTO invite_codes (code, label) VALUES ($1, $2)`, [code, label]);
-  }
-
-  async redeemInviteCode(code) {
-    const result = await this.pool.query(`SELECT * FROM invite_codes WHERE code = $1`, [code]);
-    const row = result.rows[0];
-    if (!row) return null;
-    if (row.used_at) return null;
-    await this.pool.query(`UPDATE invite_codes SET used_at = NOW(), used_by = 'oauth' WHERE code = $1`, [code]);
-    return row;
-  }
-
-  async listInviteCodes() {
-    const result = await this.pool.query(`SELECT * FROM invite_codes ORDER BY created_at DESC`);
-    return result.rows;
-  }
+  return [
+    `CREATE TABLE IF NOT EXISTS channels (
+       name TEXT PRIMARY KEY,
+       description TEXT,
+       created_at ${ts}
+     )`,
+    `CREATE TABLE IF NOT EXISTS messages (
+       id ${pk},
+       channel TEXT NOT NULL REFERENCES channels(name),
+       sender TEXT NOT NULL,
+       content TEXT NOT NULL,
+       message_type TEXT DEFAULT 'message',
+       in_reply_to INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+       created_at ${ts}
+     )`,
+    // Presence table. OAuth was dropped, so there is deliberately no session_token / invite_codes.
+    `CREATE TABLE IF NOT EXISTS instances (
+       instance_id TEXT PRIMARY KEY,
+       description TEXT,
+       last_seen ${ts},
+       status TEXT DEFAULT 'online',
+       rev TEXT
+     )`,
+    `CREATE TABLE IF NOT EXISTS shared_data (
+       key TEXT PRIMARY KEY,
+       content TEXT NOT NULL,
+       created_by TEXT NOT NULL,
+       description TEXT,
+       created_at ${ts}
+     )`,
+    `CREATE TABLE IF NOT EXISTS read_cursors (
+       channel TEXT NOT NULL,
+       instance_id TEXT NOT NULL,
+       last_read_id INTEGER NOT NULL,
+       updated_at ${ts},
+       PRIMARY KEY (channel, instance_id)
+     )`,
+    `CREATE TABLE IF NOT EXISTS work_items (
+       id ${pk},
+       project TEXT NOT NULL DEFAULT 'default',
+       title TEXT NOT NULL,
+       external_ref TEXT,
+       parent_id INTEGER REFERENCES work_items(id) ON DELETE SET NULL,
+       kind TEXT NOT NULL DEFAULT 'task',
+       domain TEXT,
+       owner TEXT,
+       state TEXT NOT NULL DEFAULT 'queued',
+       created_by TEXT,
+       claimed_at ${tsNullable},
+       created_at ${ts},
+       updated_at ${ts}
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_messages_lookup ON messages (channel, sender, created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_work_items_lookup ON work_items (project, state, owner, parent_id)`,
+    // Hot-path indexes for the busy bus:
+    //   messages(channel, id)     — the unread / since range scan (WHERE channel=? AND id>?)
+    //   messages(created_at)      — cleanup's age sweep
+    //   instances(last_seen,…)    — presence listing + markStaleOffline's status/last_seen scan
+    //   shared_data(created_at)   — listSharedData ordering + cleanup
+    //   read_cursors(updated_at)  — cleanup's 30-day cursor sweep
+    `CREATE INDEX IF NOT EXISTS idx_messages_channel_id ON messages (channel, id)`,
+    `CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages (created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_instances_last_seen_status ON instances (last_seen, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_shared_data_created_at ON shared_data (created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_read_cursors_updated_at ON read_cursors (updated_at)`,
+  ];
 }
 
-// --- Factory ---
+// ── Factory ─────────────────────────────────────────────────────────────────
 
+/**
+ * Open (creating if needed) the bus store and return a db object whose methods are all
+ * awaitable regardless of backend.
+ */
 export async function createDB() {
-  if (process.env.DATABASE_URL) {
-    const pg = await import("pg");
-    const db = new PostgresDB(process.env.DATABASE_URL);
-    await db.init(pg.default || pg);
-    return db;
-  } else {
-    const { default: Database } = await import("better-sqlite3");
-    const { existsSync, mkdirSync } = await import("fs");
-    const { join } = await import("path");
-    const { homedir } = await import("os");
+  const dataDir = process.env.CC_DATA_DIR || path.join(os.homedir(), '.cross-claude-mcp');
+  fs.mkdirSync(dataDir, { recursive: true });
+  const handle = new Database(path.join(dataDir, 'messages.db'));
+  handle.pragma('journal_mode = WAL');
+  handle.pragma('foreign_keys = ON');
+  const a = makeSqliteAdapter(handle);
 
-    // CC_DATA_DIR lets a supervisor point the bus at a scratch data dir (dev/test)
-    // or a standby import location, without touching the real ~/.cross-claude-mcp.
-    const dataDir = process.env.CC_DATA_DIR || join(homedir(), ".cross-claude-mcp");
-    if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+  // Create schema (idempotent). better-sqlite3 accepts a batch of ';'-separated statements.
+  await a.exec(schemaStatements().join(';\n'));
 
-    const db = new SqliteDB(join(dataDir, "messages.db"));
-    await db.init(Database);
-    return db;
-  }
+  const now = a.now;
+
+  const db = {
+    // Raw SQLite handle for tests to close directly.
+    db: a.raw,
+    dialect: 'sqlite',
+
+    async close() {
+      await a.close();
+    },
+
+    // ── Presence ────────────────────────────────────────────────────────────
+
+    async registerInstance(id, description, rev) {
+      // Upsert: refresh last_seen + status, keep an existing description/rev if the caller
+      // passes nothing this time round.
+      await a.run(
+        `INSERT INTO instances (instance_id, description, last_seen, status, rev)
+         VALUES (?, ?, ${now}, 'online', ?)
+         ON CONFLICT (instance_id) DO UPDATE SET
+           description = COALESCE(excluded.description, instances.description),
+           last_seen   = ${now},
+           status      = 'online',
+           rev         = COALESCE(excluded.rev, instances.rev)`,
+        [id, description ?? null, rev ?? null],
+      );
+      return this.getInstance(id);
+    },
+
+    async heartbeat(id) {
+      const r = await a.run(
+        `UPDATE instances SET last_seen = ${now}, status = 'online' WHERE instance_id = ?`,
+        [id],
+      );
+      return r.changes > 0;
+    },
+
+    async markOffline(id) {
+      const r = await a.run(`UPDATE instances SET status = 'offline' WHERE instance_id = ?`, [id]);
+      return r.changes > 0;
+    },
+
+    async markStaleOffline(thresholdSeconds) {
+      const cut = a.olderThan('last_seen', thresholdSeconds, 'seconds');
+      const r = await a.run(
+        `UPDATE instances SET status = 'offline' WHERE status = 'online' AND ${cut.clause}`,
+        cut.params,
+      );
+      return r.changes; // number flipped to offline
+    },
+
+    async getInstance(id) {
+      return a.get(`SELECT * FROM instances WHERE instance_id = ?`, [id]);
+    },
+
+    async listInstances() {
+      return a.all(`SELECT * FROM instances ORDER BY last_seen DESC`);
+    },
+
+    // ── Channels ──────────────────────────────────────────────────────────────
+
+    async createChannel(name, description) {
+      await a.run(
+        `INSERT INTO channels (name, description, created_at)
+         VALUES (?, ?, ${now})
+         ON CONFLICT (name) DO NOTHING`,
+        [name, description ?? null],
+      );
+      return a.get(`SELECT * FROM channels WHERE name = ?`, [name]);
+    },
+
+    async listChannels() {
+      return a.all(`SELECT * FROM channels ORDER BY name ASC`);
+    },
+
+    async listChannelsWithActivity() {
+      // Left join so empty channels still appear, with a null last_message_at that sorts last.
+      return a.all(
+        `SELECT c.name, c.description, c.created_at,
+                COUNT(m.id)              AS message_count,
+                MAX(m.created_at)        AS last_message_at,
+                ${a.sendersCsv('m.sender')} AS active_senders
+           FROM channels c
+           LEFT JOIN messages m ON m.channel = c.name
+          GROUP BY c.name, c.description, c.created_at
+          ORDER BY last_message_at DESC NULLS LAST`,
+      );
+    },
+
+    async findChannels(query) {
+      const like = `%${String(query ?? '').toLowerCase()}%`;
+      return a.all(
+        `SELECT * FROM channels
+          WHERE LOWER(name) LIKE ? OR LOWER(COALESCE(description, '')) LIKE ?
+          ORDER BY name ASC`,
+        [like, like],
+      );
+    },
+
+    // ── Messages ──────────────────────────────────────────────────────────────
+
+    async sendMessage(channel, sender, content, message_type = 'message', in_reply_to = null) {
+      return a.insert(
+        `INSERT INTO messages (channel, sender, content, message_type, in_reply_to, created_at)
+         VALUES (?, ?, ?, ?, ?, ${now})`,
+        [channel, sender, content, message_type ?? 'message', in_reply_to ?? null],
+      );
+    },
+
+    async getMessages(channel, limit = 50) {
+      // Newest first, each row annotated with how many direct replies it has.
+      return a.all(
+        `SELECT m.*,
+                (SELECT COUNT(*) FROM messages r WHERE r.in_reply_to = m.id) AS reply_count
+           FROM messages m
+          WHERE m.channel = ?
+          ORDER BY m.id DESC
+          LIMIT ?`,
+        [channel, limit],
+      );
+    },
+
+    async getMessagesSince(channel, afterId) {
+      return a.all(
+        `SELECT * FROM messages WHERE channel = ? AND id > ? ORDER BY id ASC`,
+        [channel, afterId],
+      );
+    },
+
+    async getUnread(channel, afterId, instanceId) {
+      // Everything after the cursor that the caller did not send themselves.
+      return a.all(
+        `SELECT * FROM messages
+          WHERE channel = ? AND id > ? AND sender <> ?
+          ORDER BY id ASC`,
+        [channel, afterId, instanceId],
+      );
+    },
+
+    async getMessage(id) {
+      return a.get(`SELECT * FROM messages WHERE id = ?`, [id]);
+    },
+
+    async getReplies(messageId) {
+      return a.all(`SELECT * FROM messages WHERE in_reply_to = ? ORDER BY id ASC`, [messageId]);
+    },
+
+    async searchMessages(query, limit = 10) {
+      return a.all(
+        `SELECT * FROM messages WHERE LOWER(content) LIKE ? ORDER BY id DESC LIMIT ?`,
+        [`%${String(query ?? '').toLowerCase()}%`, limit],
+      );
+    },
+
+    // ── Read cursors ──────────────────────────────────────────────────────────
+
+    async getReadCursor(channel, instanceId) {
+      const row = await a.get(
+        `SELECT last_read_id FROM read_cursors WHERE channel = ? AND instance_id = ?`,
+        [channel, instanceId],
+      );
+      return row ? Number(row.last_read_id) : undefined;
+    },
+
+    async setReadCursor(channel, instanceId, lastReadId) {
+      // Monotonic: a cursor never moves backwards. On conflict we keep the greater of the
+      // stored and incoming ids, so out-of-order / stale updates can't rewind read state.
+      await a.run(
+        `INSERT INTO read_cursors (channel, instance_id, last_read_id, updated_at)
+         VALUES (?, ?, ?, ${now})
+         ON CONFLICT (channel, instance_id) DO UPDATE SET
+           last_read_id = ${a.maxOf('read_cursors.last_read_id', 'excluded.last_read_id')},
+           updated_at   = ${now}`,
+        [channel, instanceId, lastReadId],
+      );
+      return this.getReadCursor(channel, instanceId);
+    },
+
+    // ── Shared data ─────────────────────────────────────────────────────────
+
+    async shareData(key, content, createdBy, description) {
+      await a.run(
+        `INSERT INTO shared_data (key, content, created_by, description, created_at)
+         VALUES (?, ?, ?, ?, ${now})
+         ON CONFLICT (key) DO UPDATE SET
+           content     = excluded.content,
+           created_by  = excluded.created_by,
+           description = excluded.description`,
+        [key, content, createdBy, description ?? null],
+      );
+      return { key, size_bytes: Buffer.byteLength(String(content), 'utf8') };
+    },
+
+    async getSharedData(key) {
+      return a.get(`SELECT * FROM shared_data WHERE key = ?`, [key]);
+    },
+
+    async listSharedData() {
+      // Metadata only — never the payload — with a byte size for each entry.
+      return a.all(
+        `SELECT key, created_by, description, LENGTH(content) AS size_bytes, created_at
+           FROM shared_data
+          ORDER BY created_at DESC, key ASC`,
+      );
+    },
+
+    async deleteSharedData(key) {
+      const r = await a.run(`DELETE FROM shared_data WHERE key = ?`, [key]);
+      return r.changes > 0;
+    },
+
+    // ── Maintenance ─────────────────────────────────────────────────────────
+
+    async cleanup(maxAgeDays = 7) {
+      const msgCut = a.olderThan('created_at', maxAgeDays, 'days');
+      const msgs = await a.run(`DELETE FROM messages WHERE ${msgCut.clause}`, msgCut.params);
+
+      const instCut = a.olderThan('last_seen', maxAgeDays, 'days');
+      const inst = await a.run(`DELETE FROM instances WHERE ${instCut.clause}`, instCut.params);
+
+      const dataCut = a.olderThan('created_at', maxAgeDays, 'days');
+      const data = await a.run(`DELETE FROM shared_data WHERE ${dataCut.clause}`, dataCut.params);
+
+      // Cursors are cheap but unbounded; give them a fixed 30-day retention.
+      const curCut = a.olderThan('updated_at', 30, 'days');
+      const cursors = await a.run(`DELETE FROM read_cursors WHERE ${curCut.clause}`, curCut.params);
+
+      return {
+        messages: msgs.changes,
+        instances: inst.changes,
+        shared_data: data.changes,
+        read_cursors: cursors.changes,
+      };
+    },
+
+    async snapshot(destPath) {
+      return a.snapshot(destPath);
+    },
+
+    // ── Work board ────────────────────────────────────────────────────────────
+
+    async createWorkItem({
+      project = 'default',
+      title,
+      external_ref = null,
+      parent_id = null,
+      kind = 'task',
+      domain = null,
+      owner = null,
+      state,
+      created_by = null,
+    }) {
+      // An item born with an owner is already claimed — default its state to 'claimed'
+      // (never the contradictory owned-but-'queued') unless a state was passed explicitly.
+      const effectiveState = state ?? (owner ? 'claimed' : 'queued');
+      // claimed_at is stamped only when the item is created already owned.
+      const claimedAt = owner ? now : 'NULL';
+      const id = await a.insert(
+        `INSERT INTO work_items
+           (project, title, external_ref, parent_id, kind, domain, owner, state, created_by,
+            claimed_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${claimedAt}, ${now}, ${now})`,
+        [project, title, external_ref, parent_id, kind, domain, owner, effectiveState, created_by],
+      );
+      return this.getWorkItem(id);
+    },
+
+    async getWorkItem(id) {
+      return a.get(`SELECT * FROM work_items WHERE id = ?`, [id]);
+    },
+
+    async listWorkItems(filters = {}) {
+      const where = [];
+      const params = [];
+
+      // Plain scalar equality filters. `state` is handled separately below because an
+      // array `states` filter takes precedence over the single `state` when both are given.
+      for (const field of ['project', 'owner', 'parent_id', 'kind']) {
+        if (filters[field] !== undefined && filters[field] !== null) {
+          where.push(`${field} = ?`);
+          params.push(filters[field]);
+        }
+      }
+
+      // states (array) → state IN (?, ?, …); prefer it over the single `state` if both set.
+      const states = Array.isArray(filters.states) ? filters.states : null;
+      if (states && states.length) {
+        where.push(`state IN (${states.map(() => '?').join(', ')})`);
+        params.push(...states);
+      } else if (filters.state !== undefined && filters.state !== null) {
+        where.push(`state = ?`);
+        params.push(filters.state);
+      }
+
+      // updated_after (timestamp string) → only items touched since then.
+      if (filters.updated_after !== undefined && filters.updated_after !== null) {
+        where.push(`updated_at > ?`);
+        params.push(filters.updated_after);
+      }
+
+      const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      // Ordering groups each epic immediately before its children:
+      //   COALESCE(parent_id, id)     — child sorts under its parent's id
+      //   (parent_id IS NOT NULL)     — the parent (false=0) precedes its children (true=1)
+      //   id                          — stable order within the group
+      return a.all(
+        `SELECT * FROM work_items
+         ${clause}
+         ORDER BY COALESCE(parent_id, id), (parent_id IS NOT NULL), id`,
+        params,
+      );
+    },
+
+    async claimWorkItem(id, owner) {
+      // Atomic mutex. The WHERE guard only matches an unowned item or one already owned by
+      // this same owner (idempotent re-claim), so a second session claiming an owned item
+      // affects zero rows → claimed:false. queued→claimed on first take; other states kept.
+      const res = await a.run(
+        `UPDATE work_items
+            SET owner = ?,
+                state = CASE WHEN state = 'queued' THEN 'claimed' ELSE state END,
+                claimed_at = ${now},
+                updated_at = ${now}
+          WHERE id = ? AND (owner IS NULL OR owner = ?)`,
+        [owner, id, owner],
+      );
+      const item = await this.getWorkItem(id);
+      return { claimed: res.changes > 0, item };
+    },
+
+    async transferWorkItem(id, newOwner) {
+      // Reassign or, with a null owner, release. State is intentionally left as-is.
+      await a.run(
+        `UPDATE work_items SET owner = ?, updated_at = ${now} WHERE id = ?`,
+        [newOwner ?? null, id],
+      );
+      return this.getWorkItem(id);
+    },
+
+    async setWorkItemState(id, state) {
+      await a.run(
+        `UPDATE work_items SET state = ?, updated_at = ${now} WHERE id = ?`,
+        [state, id],
+      );
+      return this.getWorkItem(id);
+    },
+  };
+
+  // Every bus starts with a `general` channel.
+  await db.createChannel('general', 'General discussion');
+
+  return db;
 }
+
+export default createDB;

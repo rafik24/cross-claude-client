@@ -135,16 +135,19 @@ let backoff = 1000;
 const MAX_BACKOFF = 15000;
 
 function wsUrl() {
-  // leader base is http://host:port → ws://host:port/cc/ws
+  // leader base is http://host:port → ws://host:port/cc/ws. The token is sent in the
+  // Authorization header (below), NOT the URL, so it never lands in a log/proxy line (H1).
   const b = BASE.replace(/^http/, 'ws').replace(/\/$/, '');
-  return `${b}/cc/ws?identity=${encodeURIComponent(instance)}&token=${encodeURIComponent(TOKEN)}`;
+  return `${b}/cc/ws?identity=${encodeURIComponent(instance)}`;
 }
 
 async function connectWS() {
   if (typeof WebSocket === 'undefined') return false;   // Node too old for a built-in WS client → poll only
   if (!BASE) { await ensureBase(true); if (!BASE) return false; }
   try {
-    ws = new WebSocket(wsUrl());
+    // Node's built-in WebSocket transmits this header on the handshake (verified on Node 24);
+    // the leader accepts it and keeps the token out of the URL. Browsers fall back to ?token=.
+    ws = new WebSocket(wsUrl(), { headers: { Authorization: 'Bearer ' + TOKEN } });
   } catch { return false; }
 
   ws.addEventListener('open', async () => {

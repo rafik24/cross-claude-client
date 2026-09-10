@@ -43,6 +43,14 @@ command and config value (`D:/projects/...`) — backslashes break Node's module
 cd "$REPO" && npm ci      # ONLY if this node may host the bus; skip for connect-only
 ```
 
+> **Security (a host must read this).** The bus assumes a **trusted network** (tailnet/LAN) and
+> speaks plain HTTP/WS — never bind it to a public interface without TLS + a reverse proxy. It
+> binds **loopback by default**: to serve other nodes set **`CC_BIND`** (tailnet IP or `0.0.0.0`),
+> which then **requires `MCP_API_KEY`** (it refuses to start open on a network interface). Set
+> **`CC_ADMIN_KEY`** — a secret separate from the chat token — on every node, or `/cc/export`,
+> `/cc/stepdown` and `/cc/import` stay loopback-only and cross-host replication/`migrate` won't
+> work. Full details in [`README.md` → Security](./README.md#security).
+
 ## 3. Create the connection config — `~/.claude/.cross-claude-bus`
 
 This file is **git-ignored on purpose** — the token never goes into version control.
