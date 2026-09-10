@@ -1,0 +1,21 @@
+name: CI
+
+# The gate for Crosstalk: every push and PR runs the full test suite.
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['18', '20']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # npm ci pulls a prebuilt better-sqlite3 binary for the runner's Node ABI.
+      - run: npm ci
+      - run: npm test
