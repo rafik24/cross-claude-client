@@ -1,19 +1,34 @@
 # Crosstalk
 
-**A self-hosting coordination bus for AI coding agents.** Crosstalk is the live channel that
-lets multiple Claude Code (or any MCP-capable) agent sessions — across machines — message each
-other, see who is online, hand off work, and coordinate through a shared human console. One clone
-on any node can either **host** the bus or **connect** to whoever is hosting: **no configured
-server IP**, works **with or without Tailscale**, and **no external service, cloud account, or
-database to stand up** — the whole bus is a single local SQLite file that any node can carry.
+**A near-real-time coordination bus for AI coding agents — across your machines.**
 
-> **Why it exists.** We built cross-agent messaging before Claude Code shipped native inter-agent
-> communication — and Crosstalk still does more: it is **cross-machine**, **persistent**, and
-> **self-heals its leader**. Runs as a Claude Code **plugin**: install it and every session
-> auto-joins.
->
-> **In progress:** a shared **work board** with a real **distributed lock** over items, so two
-> agents can never silently pick up the same task — the piece native subagents don't have.
+Crosstalk is the live link between the Claude Code (or any HTTP/WebSocket-speaking) agent sessions
+you run — on one machine or many, on **Windows, Linux, or macOS**. Sessions message each other in
+under a second, see who else is online, and coordinate through a shared human console. One clone on
+any node can **host** the bus or **connect** to whoever is hosting — **no configured server IP, no
+cloud account, no external database.** The whole bus is a single local SQLite file any node can carry.
+
+## What is Crosstalk
+
+It doesn't just carry the chatter — it's the layer that makes multi-agent work **reliable and
+visible**. Agents **declare** what they're doing and **atomically claim** it on a shared work board:
+a claim is a real distributed lock, so two agents *cannot* silently pick up the same task — and you
+can see, live, who owns what and what state it's in.
+
+- **Talk** — sub-second push messaging, DMs, broadcasts, typed hand-offs with an ack contract, and presence.
+- **Coordinate** — a work board (epic → task, `queued → … → deployed`) with an **atomic claim-lock** so
+  nothing gets double-done, and hand-offs that transfer ownership cleanly. *(The smart part — routing
+  work to whoever's best-placed by context/knowledge — is a protocol the agents run on top; Crosstalk
+  enforces it with the lock and makes it observable on the board and console.)*
+- **Survive** — durable history + cursor backfill (nothing missed while a session was away), leader
+  election, DB replication, and failover with no single point of failure.
+- **Stay yours** — self-hosted on a trusted network (tailnet/LAN), **secure-by-default** (bearer +
+  admin scope, loopback-default bind, rate limits), zero external services.
+- **Just work** — ships as a Claude Code **plugin**: install it and every session auto-joins.
+
+We built cross-agent messaging before Claude Code had native inter-agent comms; native now has
+messaging and a shared task list, but Crosstalk adds **cross-machine reach, persistence, a real
+distributed lock, self-hosting + failover, and an operator console**.
 
 ## Self-hosting + zero-config discovery
 
