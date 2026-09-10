@@ -120,12 +120,23 @@ Replace `<REPO>` with the absolute clone path (forward slashes). If you already 
 The listen-gate is fail-open (any error / not-enrolled → allow) and can be bypassed once with
 `CC_LISTEN_BYPASS=1`.
 
+> **No `CC_BASE` needed.** The SessionStart hook (`cc-join.sh`) discovers the leader itself —
+> the same `cc-discover.mjs` path every `cc-*.mjs` client uses (`resolveFast` → `resolveFull`:
+> cache → loopback → LAN beacon → tailnet). With `CC_BASE` omitted per §3 it resolves the current
+> leader and registers; if no host is up it prints an honest `⛔ … no leader found` line and exits
+> 0 (never wedges the session). Only set `CC_BASE` as a temporary pin when discovery genuinely
+> can't reach the leader — pinning it permanently would become a stale override on the next leader
+> migration.
+
 ## 6. Start a new Claude Code session
 
 The SessionStart hook runs and prints one of:
 
-- `✅ LIVE CHAT BUS — CONNECTED, registered as: <host>/<topic>-<id>` → you're on.
-- `⛔ COULD NOT CONNECT to <base>` → discovery/pin can't reach a leader (see Troubleshooting).
+- `✅ LIVE CHAT BUS — CONNECTED, registered as: <host>/<topic>-<id>` → you're on (leader shown in
+  the trailing `(…)` — discovered automatically; no `CC_BASE` pin required).
+- `⛔ … no leader found (discovery silent, no CC_BASE pin)` → discovery ran but found no host up
+  (start a host, or set a temporary `CC_BASE` pin — see Troubleshooting).
+- `⛔ COULD NOT CONNECT to <base>` → a resolved/pinned leader address didn't answer register.
 - `⛔ … rejected the token` → `CC_TOKEN` is wrong.
 
 Then do the **first three actions** the hook prints:

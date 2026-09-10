@@ -30,6 +30,7 @@ POLL="$HERE/cc-poll.mjs"
 SEND="$HERE/cc-send.mjs"
 NAME="$HERE/cc-name.mjs"
 ACK="$HERE/cc-ack.mjs"
+DISCOVER="$HERE/cc-discover.mjs"    # leader discovery (same module every cc-*.mjs client uses)
 [ -f "$POLL" ] || exit 0
 
 # SessionStart delivers a JSON payload on stdin that includes session_id. Grab it
@@ -41,12 +42,35 @@ SID="$(printf '%s' "$PAYLOAD" | node -e 'let s="";process.stdin.on("data",d=>s+=
 # `node …` commands resolve. No-op on Linux (cygpath absent).
 if command -v cygpath >/dev/null 2>&1; then
   HERE="$(cygpath -m "$HERE")"; WS="$(cygpath -m "$WS")"; POLL="$(cygpath -m "$POLL")"; SEND="$(cygpath -m "$SEND")"
-  NAME="$(cygpath -m "$NAME")"; ACK="$(cygpath -m "$ACK")"
+  NAME="$(cygpath -m "$NAME")"; ACK="$(cygpath -m "$ACK")"; DISCOVER="$(cygpath -m "$DISCOVER")"
 fi
 
 # shellcheck disable=SC1090
-. "$CFG"                       # CC_BASE, CC_TOKEN
-[ -n "${CC_BASE:-}" ] || exit 0
+. "$CFG"                       # CC_TOKEN, and CC_BASE only if manually PINNED (usually absent)
+
+# A discovery-based enrollment deliberately OMITS CC_BASE (ENROLLMENT.md §3/§5): the bus has no
+# fixed IP, so the leader is DISCOVERED, not pinned. Every cc-*.mjs client already does this via
+# cc-discover.mjs; this hook used to `exit 0` here when CC_BASE was unset and so joined silently on
+# exactly the machines the docs tell you to set up. Resolve the leader the same way the clients do
+# (resolveFast → resolveFull) rather than pinning CC_BASE, which would become a global override that
+# breaks on the next leader migration. Fail-soft throughout — a SessionStart hook must never wedge.
+if [ -z "${CC_BASE:-}" ] && [ -f "$DISCOVER" ]; then
+  CC_BASE="$(node --input-type=module -e '
+    import { pathToFileURL } from "node:url";
+    try {
+      const m = await import(pathToFileURL(process.argv[1]).href);
+      const cfg = m.loadConfig();
+      let leader = await m.resolveFast({ token: cfg.token, pin: cfg.pin });
+      if (!leader) leader = await m.resolveFull({ token: cfg.token, pin: cfg.pin });
+      if (leader && leader.base) process.stdout.write(String(leader.base));
+    } catch {}
+  ' "$DISCOVER" 2>/dev/null || true)"
+fi
+
+if [ -z "${CC_BASE:-}" ]; then
+  echo "⛔ LIVE CHAT BUS — no leader found (discovery silent, no CC_BASE pin). Would join once a host is up."
+  exit 0
+fi
 
 machine=$(hostname 2>/dev/null | tr 'A-Z' 'a-z' | tr -c 'a-z0-9._-' '-'); machine="${machine%-}"
 [ -n "$machine" ] || machine="unknown"
