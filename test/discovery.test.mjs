@@ -10,10 +10,21 @@ import { dirname, join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { whoami, resolveFull, resolveFast, cacheLeader } from '../cc-discover.mjs';
+import { createServer as createNetServer } from 'node:net';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(__dirname, '..', 'server', 'server.mjs');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Reserve an ephemeral port and immediately free it — a "dead base" nothing is listening on,
+// without hardcoding a fixed port a tester might happen to run their own instance on (F2).
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = createNetServer();
+    s.once('error', reject);
+    s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
+  });
+}
 
 function boot(port, epoch, host) {
   const dir = mkdtempSync(join(tmpdir(), 'ccdisc-'));
@@ -23,8 +34,8 @@ function boot(port, epoch, host) {
   });
 }
 
-// Poll until a base answers /cc/whoami, or give up. The vendored server has a heavy
-// MCP-SDK import chain and can take ~10s to bind on some hosts, so a fixed sleep is flaky.
+// Poll until a base answers /cc/whoami, or give up. The server can take a few seconds to bind
+// on a cold host, so a fixed sleep would be flaky.
 async function waitUp(base, timeoutMs = 30000) {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
@@ -57,8 +68,9 @@ try {
   assert.equal((await whoami('http://127.0.0.1:8792')).epoch, 3, 'server A epoch');
   assert.equal((await whoami('http://127.0.0.1:8793')).epoch, 9, 'server B epoch');
 
-  // dead base → null
-  assert.equal(await whoami('http://127.0.0.1:8799', 800), null, 'dead base → null');
+  // dead base → null (an ephemeral, guaranteed-free port — not a fixed one a tester might occupy)
+  const deadPort = await freePort();
+  assert.equal(await whoami(`http://127.0.0.1:${deadPort}`, 800), null, 'dead base → null');
 
   // resolveFull with both as peers must pick the HIGHEST epoch
   process.env.CC_PORT = '8792';

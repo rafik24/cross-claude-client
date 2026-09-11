@@ -37,17 +37,30 @@ function usage(msg) {
   cc-work claim <id> --as <session-id>
   cc-work advance <id> --to <state>       (state: ${WORK_STATES.join(" | ")})
   cc-work handoff <id> --to <session-id>
-  cc-work release <id>`);
+  cc-work release <id>
+
+  global: --base <url> (discovery seed) · --pin <url> (HARD pin, no discovery/election) · --token <t>`);
   process.exit(2);
 }
 if (!cmd) usage();
 
 const cfg = loadConfig();
-const pin = opt("--base", process.env.CC_BASE) || cfg.pin;
 const TOKEN = opt("--token", process.env.CC_TOKEN) || cfg.token;
-const leader = await resolveFast({ pin, token: TOKEN });
-if (!leader) { console.error("cc-work: no bus leader found (loopback / LAN / tailnet all silent)"); process.exit(1); }
-const BASE = leader.base;
+// --pin <base> (or --base/CC_BASE with CC_FORCE_BASE=1) is a HARD pin: talk to exactly this
+// base, no discovery, no election. Without it, --base is only a discovery SEED — resolveFast
+// escalates and picks the highest-epoch reachable leader, so a command aimed at an isolated
+// TEST instance would still route to a live higher-epoch bus (F1, reported 2026-09-10). Use the
+// hard pin to test against an isolated instance while a real bus is up.
+const hardPin = opt("--pin") || (process.env.CC_FORCE_BASE === "1" ? (opt("--base", process.env.CC_BASE)) : null);
+let BASE;
+if (hardPin) {
+  BASE = String(hardPin).replace(/\/+$/, "");
+} else {
+  const pin = opt("--base", process.env.CC_BASE) || cfg.pin;
+  const leader = await resolveFast({ pin, token: TOKEN });
+  if (!leader) { console.error("cc-work: no bus leader found (loopback / LAN / tailnet all silent)"); process.exit(1); }
+  BASE = leader.base;
+}
 
 async function api(method, path, body) {
   const r = await fetch(BASE + "/api" + path, {

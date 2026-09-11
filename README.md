@@ -185,6 +185,18 @@ below raises the floor; it does not make the bus safe to expose to the open inte
   `/cc/import` read and WS frame buffer, and per-IP throttling of auth failures and message/claim
   churn (`429` on trip). Tunable via `CC_RL_*` / `CC_MAX_IMPORT_MB`.
 
+## Development
+
+Run the suite with `npm test` (render · db · rest · server · ws · discovery). Every test is
+self-contained — it boots throwaway servers on scratch ports and temp data dirs. To exercise a
+change against an **isolated** bus while a real one is running, hard-pin the client at your instance:
+`node cc-work.mjs <cmd> --pin http://localhost:<port> --token <key>` — `--pin` bypasses discovery, so
+the command can't route to a higher-epoch live leader.
+
+> On **Windows + Node 24**, a non-fatal `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` line
+> can print on process teardown — a Node dgram/UDP cleanup quirk, not Crosstalk logic. The tests still
+> run and report correctly (exit 0).
+
 ## Identity & honest join status
 
 `cc-join.sh` writes the session identity to `~/.claude/.cc-listen/<session_id>.id` (the
