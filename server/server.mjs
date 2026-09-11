@@ -26,6 +26,7 @@ import express from 'express';
 import { createDB } from './db.mjs';
 import { createRestRouter } from './rest-api.mjs';
 import { attachWsHub } from './ws-hub.mjs';
+import { codeRev } from '../cc-rev.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, '..');
@@ -152,6 +153,15 @@ export async function startServer(opts = {}) {
 
   const db = await makeDB();
 
+  // Data watermark: the highest message id this leader has served, tracked IN MEMORY so
+  // /cc/whoami (a discovery hot path) never hits the DB. Seeded from the store at boot (so a
+  // just-imported/replicated snapshot reports the right level) and bumped by the sendMessage
+  // decorator below. Election uses it as a freshness tiebreak (see cc-discover.outranks): among
+  // standbys forked from a common snapshot, the one that took the most writes outranks a staler
+  // one at the same epoch. Fail-soft: a db without maxMessageId (e.g. a test stub) starts at 0.
+  let watermark = 0;
+  try { watermark = (await db.maxMessageId?.()) ?? 0; } catch { watermark = 0; }
+
   // Per-caller limiters: repeated auth failures (per-IP) and write/claim churn (per-IP+identity).
   const authFailLimiter = createRateLimiter({ windowMs: config.rateLimit.authFailWindowMs, max: config.rateLimit.authFailMax });
   const writeLimiter = createRateLimiter({ windowMs: config.rateLimit.writeWindowMs, max: config.rateLimit.writeMax });
@@ -175,8 +185,15 @@ export async function startServer(opts = {}) {
   });
 
   // Discovery beacon: advertises WHO is leading and WHERE — never the token.
+  //   watermark    highest message id served — the freshness tiebreak for election.
+  //   rev / dirty  the running code revision of this leader's checkout, so the estate can spot a
+  //                leader silently serving stale code (the drift check the rewrite had dropped).
   app.get('/cc/whoami', (_req, res) => {
-    res.json({ role: 'leader', host: config.host, epoch: config.epoch, base: config.baseUrl });
+    const code = codeRev();
+    res.json({
+      role: 'leader', host: config.host, epoch: config.epoch, base: config.baseUrl,
+      watermark, rev: code.rev, dirty: code.dirty,
+    });
   });
 
   app.get('/', (_req, res) => {
@@ -255,6 +272,7 @@ export async function startServer(opts = {}) {
   const rawSendMessage = db.sendMessage.bind(db);
   db.sendMessage = async (...args) => {
     const id = await rawSendMessage(...args);
+    if (typeof id === 'number' && id > watermark) watermark = id;   // keep the whoami watermark current
     try {
       const msg = await db.getMessage(id);
       if (msg) hub.notify(msg);

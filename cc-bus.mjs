@@ -21,17 +21,18 @@
 // ---------------------------------------------------------------------------
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, statSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
 import {
-  loadConfig, resolveFull, whoami, cacheLeader, DEFAULT_PORT,
+  loadConfig, resolveFull, whoami, cacheLeader, readCache, outranks, DEFAULT_PORT,
 } from './cc-discover.mjs';
 import { startBeacon } from './cc-beacon.mjs';
 import { revString } from './cc-rev.mjs';
+import { canonicalShort } from './cc-render.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = join(__dirname, 'server', 'server.mjs');
@@ -39,6 +40,45 @@ const HOST = process.env.CC_HOST || hostname();
 const DATA_DIR = process.env.CC_DATA_DIR || join(homedir(), '.cross-claude-mcp');
 const EPOCH_FILE = join(DATA_DIR, 'epoch');
 const DB_FILE = join(DATA_DIR, 'messages.db');
+
+// --- singleton supervisor bookkeeping (#6) ---
+// A per-machine heartbeat file so `cc-bus ensure` can tell whether a supervisor is already
+// running here WITHOUT a fragile cross-platform pid check in bash: liveness is process.kill(pid,0)
+// (works on Windows + POSIX in Node) AND a fresh timestamp. The bus-visible presence id below
+// makes the same standby count observable estate-wide via `cc-bus status` (#6 coverage / C).
+const SUPERVISOR_FILE = join(DATA_DIR, 'supervisor.json');
+const SPAWN_LOCK = join(DATA_DIR, '.supervisor.spawn.lock');
+const HEARTBEAT_MS = 10000;        // supervisor rewrites its heartbeat this often
+const SUPERVISOR_STALE_MS = 30000; // a heartbeat older than this (3 missed beats) ⇒ presumed dead
+const SPAWN_LOCK_STALE_MS = 15000; // an abandoned spawn lock older than this is cleared
+const SUPERVISOR_PREFIX = 'cc-bus-supervisor/';   // presence-id prefix for coverage visibility
+
+// Is `pid` a live process? signal 0 tests existence cross-platform: it throws ESRCH when the
+// process is gone and EPERM when it exists but we can't signal it (still alive → true).
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return e.code === 'EPERM'; }
+}
+
+function readSupervisor() {
+  try { return JSON.parse(readFileSync(SUPERVISOR_FILE, 'utf8')); } catch { return null; }
+}
+function writeSupervisor(rec) {
+  try { mkdirSync(DATA_DIR, { recursive: true }); writeFileSync(SUPERVISOR_FILE, JSON.stringify(rec)); } catch {}
+}
+// True when a supervisor is CURRENTLY running on this box (heartbeat fresh AND its pid alive).
+// Residual (accepted): if a supervisor is OOM/SIGKILLed (no clean shutdown → the file lingers) and
+// the OS recycles its exact pid to an unrelated live process within SUPERVISOR_STALE_MS, this can
+// briefly report a false "live". The window is ≤30s and self-heals when the ts goes stale; a clean
+// shutdown removes the file at once, and a crashed SPAWNED child is caught by the dead-pid check.
+function supervisorLive() {
+  const s = readSupervisor();
+  if (!s || !s.ts) return null;
+  if (Date.now() - s.ts > SUPERVISOR_STALE_MS) return null;
+  if (!pidAlive(s.pid)) return null;
+  return s;
+}
 
 // A SEPARATE admin secret (shared across the estate, like CC_TOKEN) that gates the dangerous
 // admin routes — /cc/export (full-DB download), /cc/stepdown (remote kill) and /cc/import
@@ -138,6 +178,27 @@ async function replicateSnapshot(leader, token) {
   } catch { return false; }
 }
 
+// Advertise this supervisor on the bus so `cc-bus status` can count failover capacity across the
+// estate (#6 coverage / C). Reuses the existing presence table — a distinct instance_id per host,
+// heartbeated. Best-effort/fail-soft: a registration miss never disturbs the supervisor.
+async function registerSupervisor(id, role, epoch, token, port) {
+  let base = null;
+  if (role === 'leader') base = `http://127.0.0.1:${port}`;   // I am the server → register to myself
+  else { const c = readCache(); base = c?.base || null; }      // client → the discovered leader
+  if (!base) return;
+  try {
+    await fetch(base + '/api/register', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        instance_id: id,
+        description: `supervisor ${role || 'starting'} epoch ${epoch}`,
+        rev: revString(),
+      }),
+    });
+  } catch {}
+}
+
 // ===========================================================================
 // cc-bus start — election + supervise + failover
 // ===========================================================================
@@ -151,13 +212,39 @@ async function cmdStart() {
   let steppingDown = false;
   let role = null;
   let monitorIv = null;
+  let currentEpoch = 0;   // the term we currently believe in (for the heartbeat/registration)
 
   const STEPDOWN_MARKER = join(DATA_DIR, '.stepdown');
 
+  // --- singleton heartbeat + estate-visible presence (#6) -------------------------------------
+  // Prove this box has a live supervisor (so `cc-bus ensure` won't start a second one) and make
+  // that failover capacity observable estate-wide (so `cc-bus status` can show the SPOF state).
+  const supervisorId = SUPERVISOR_PREFIX + HOST;
+  const beat = () => {
+    writeSupervisor({ pid: process.pid, ts: Date.now(), host: HOST, role: role || 'starting', epoch: currentEpoch });
+    registerSupervisor(supervisorId, role, currentEpoch, token, port).catch(() => {});
+  };
+  beat();
+  const heartbeatIv = setInterval(beat, HEARTBEAT_MS);
+  heartbeatIv.unref?.();
+
   async function becomeLeader() {
+    // #7 empty-snapshot guard: never blank the bus. If this node has NO local DB at all (never
+    // led, never replicated), do one final full scan before promoting — a just-joined node must
+    // not promote an empty store over a leader that discovery merely hadn't found yet. A node that
+    // is genuinely alone still bootstraps a fresh (empty) bus, but says so loudly.
+    if (!existsSync(DB_FILE)) {
+      const other = await resolveFull({ token, skipLoopback: true, skipSelf: true });
+      if (other) {
+        log(`local DB is empty and a live leader ${other.host} (epoch ${other.epoch}) exists → joining as CLIENT rather than blanking the bus`);
+        return runClient();
+      }
+      log('⚠️  local DB is empty and no leader was found anywhere → bootstrapping a FRESH bus (there is no history to preserve)');
+    }
     try { rmSync(STEPDOWN_MARKER); } catch {}   // clear any stale marker before we lead
     const epoch = readEpoch() + 1;      // strictly higher than the last term this DB served
     writeEpoch(epoch);
+    currentEpoch = epoch;
     role = 'leader';
     log(`no bus present → becoming LEADER at epoch ${epoch} (port ${port})`);
     child = spawnLeader(epoch, port, token);
@@ -178,14 +265,24 @@ async function cmdStart() {
     });
 
     // Continuous leadership monitor: while we lead, keep scanning for a peer that OUTRANKS us
-    // (higher epoch, or equal epoch + lexicographically-lower host) and step down to it. A
-    // repeating check (not the old one-shot) so any tie/race self-corrects within seconds to
-    // the single deterministic winner.
+    // (higher epoch; or equal epoch with a FRESHER snapshot — higher watermark — else a
+    // lexicographically-lower host) and step down to it. Using the shared outranks() ordering
+    // means the monitor and discovery can never disagree, so a stale co-leader always yields to
+    // the freshest one (#7). A repeating check (not one-shot) so any tie/race self-corrects.
     monitorIv = setInterval(async () => {
       if (role !== 'leader') { clearInterval(monitorIv); monitorIv = null; return; }
       const peer = await resolveFull({ token, skipLoopback: true, skipSelf: true });
-      if (peer && (peer.epoch > epoch || (peer.epoch === epoch && String(peer.host).localeCompare(HOST) < 0))) {
-        log(`peer ${peer.host} epoch ${peer.epoch} outranks me (I am ${HOST} epoch ${epoch}) → stepping down to CLIENT`);
+      if (!peer) return;
+      // Read our OWN watermark from loopback for the equal-epoch tiebreak. If our server can't be
+      // read right now, SKIP this tick rather than compare against a phantom watermark of 0 — a
+      // transient loopback miss must never cause a false step-down that would forfeit our newer
+      // writes to a same-epoch peer. Next tick retries.
+      const self = await whoami(`http://127.0.0.1:${port}`, 1000);
+      if (!self) return;
+      const me = { epoch, watermark: self.watermark ?? 0, host: HOST };
+      if (outranks(peer, me)) {
+        log(`peer ${peer.host} (epoch ${peer.epoch}, watermark ${peer.watermark ?? 0}) outranks me ` +
+            `(${HOST} epoch ${epoch}, watermark ${me.watermark}) → stepping down to CLIENT`);
         clearInterval(monitorIv); monitorIv = null;
         steppingDown = true;
         try { await fetch(`http://127.0.0.1:${port}/cc/stepdown`, { method: 'POST', headers: { Authorization: adminBearer(token) } }); } catch { try { child.kill(); } catch {} }
@@ -226,6 +323,7 @@ async function cmdStart() {
     const leader = await resolveFull({ token });   // any live bus, incl. this box's loopback
     if (leader) {
       cacheLeader(leader);
+      currentEpoch = leader.epoch ?? currentEpoch;
       if (leader.host === HOST && /127\.0\.0\.1|localhost/.test(leader.base)) {
         // A server is already running on THIS host (previous cc-bus). Don't double-start.
         log(`a server is already running here (epoch ${leader.epoch}) → CLIENT mode`);
@@ -238,10 +336,64 @@ async function cmdStart() {
     }
   }
 
-  process.on('SIGINT', () => { steppingDown = true; try { child?.kill(); } catch {} process.exit(0); });
-  process.on('SIGTERM', () => { steppingDown = true; try { child?.kill(); } catch {} process.exit(0); });
+  // On a clean shutdown, drop the singleton heartbeat file so the next `cc-bus ensure` sees the
+  // slot as free at once (instead of waiting out the staleness window) and re-starts a supervisor.
+  const shutdown = () => {
+    steppingDown = true;
+    try { clearInterval(heartbeatIv); } catch {}
+    try { const s = readSupervisor(); if (s && s.pid === process.pid) rmSync(SUPERVISOR_FILE); } catch {}
+    try { child?.kill(); } catch {}
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 
   await electAndRun();
+}
+
+// ===========================================================================
+// cc-bus ensure — idempotent per-machine supervisor (#6, approach B)
+//
+// The SessionStart hook calls this so that any box with an active Claude session has failover
+// capacity by construction. It starts a `cc-bus start` supervisor ONLY if one is not already
+// running here. Liveness is a fresh heartbeat + a live pid (process.kill(pid,0), cross-platform),
+// NOT a fragile bash pid check. An atomic lock serializes concurrent session-starts so exactly
+// one supervisor runs per machine. Fast (no network) and fail-soft — it must never wedge a start.
+// ===========================================================================
+function cmdEnsure() {
+  const live = supervisorLive();
+  if (live) { log(`supervisor already running here (pid ${live.pid}, role ${live.role || '?'}) — nothing to do`); return; }
+
+  // Serialize the check-and-spawn so two near-simultaneous ensures don't both start a supervisor.
+  mkdirSync(DATA_DIR, { recursive: true });
+  let locked = false;
+  try { mkdirSync(SPAWN_LOCK); locked = true; }
+  catch (e) {
+    if (e.code !== 'EEXIST') { log(`ensure: could not take spawn lock (${e.message}) — skipping`); return; }
+    // Lock held: clear it only if it's abandoned (older than the stale window), else another
+    // ensure is mid-spawn right now → let it win and exit quietly.
+    let age = Infinity;
+    try { age = Date.now() - statSync(SPAWN_LOCK).mtimeMs; } catch {}
+    if (age > SPAWN_LOCK_STALE_MS) {
+      try { rmSync(SPAWN_LOCK, { recursive: true, force: true }); mkdirSync(SPAWN_LOCK); locked = true; } catch { return; }
+    } else { return; }   // a concurrent ensure is starting the supervisor
+  }
+
+  try {
+    // Re-check under the lock — another ensure may have started one between our first check and
+    // taking the lock.
+    if (supervisorLive()) { log('supervisor came up concurrently — nothing to do'); return; }
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'start'], {
+      detached: true, stdio: 'ignore',
+    });
+    child.unref();
+    // Record the child pid immediately so a follow-on ensure sees the slot as claimed before the
+    // spawned `start` has finished booting and written its own first heartbeat.
+    writeSupervisor({ pid: child.pid, ts: Date.now(), host: HOST, role: 'starting', epoch: 0 });
+    log(`started local supervisor (pid ${child.pid}) — this box now has failover capacity`);
+  } finally {
+    if (locked) { try { rmSync(SPAWN_LOCK, { recursive: true, force: true }); } catch {} }
+  }
 }
 
 // ===========================================================================
@@ -253,14 +405,60 @@ async function cmdStatus() {
   if (leader) {
     const mine = revString();
     const leaderRev = leader.rev || 'unknown';
-    console.log(`LEADER: ${leader.host}  epoch=${leader.epoch}  base=${leader.base}  rev=${leaderRev}`);
-    console.log(`THIS NODE: ${hostname()}  rev=${mine}`);
+    console.log(`LEADER: ${leader.host}  epoch=${leader.epoch}  watermark=${leader.watermark ?? 0}  base=${leader.base}  rev=${leaderRev}`);
+    console.log(`THIS NODE: ${hostname()}  rev=${mine}  local-supervisor=${supervisorLive() ? 'running' : 'none'}`);
     if (leader.rev && mine !== 'unknown' && mine !== leader.rev) {
       console.log(`⚠️  CODE DRIFT — this checkout (${mine}) differs from the leader (${leader.rev}). git pull && restart the bus to sync.`);
     }
+    await reportCoverage(leader, cfg.token);
   } else {
     console.log('no bus leader found (loopback / LAN / tailnet all silent)');
+    const local = supervisorLive();
+    console.log(`THIS NODE: ${hostname()}  local-supervisor=${local ? `running (pid ${local.pid})` : 'none'}`);
     process.exitCode = 1;
+  }
+}
+
+// Compute failover coverage from the bus roster (pure, so it is unit-testable). Returns the
+// online supervisor hosts and the `backups` — supervisor hosts OTHER than the leader's, i.e. the
+// boxes that could take over if the leader died (the leader's own supervisor is not its backup).
+// CRITICAL: the server canonicalizes the short segment of a registered id (lowercases, slug), so a
+// stored supervisor host is `canonicalShort(HOST)` while `leaderHost` from /cc/whoami is the RAW
+// os.hostname(). Both sides MUST be canonicalized before comparing, or a leader on an uppercase /
+// underscore host (e.g. DESKTOP-7ODO6OU) never matches its own supervisor and gets falsely counted
+// as a backup — a "capacity OK" all-clear on the exact SPOF this feature exists to warn about.
+export function failoverCoverage(instances, leaderHost) {
+  const supers = (instances || []).filter(
+    (i) => i.status === 'online' && String(i.instance_id).startsWith(SUPERVISOR_PREFIX),
+  );
+  const hosts = [...new Set(supers.map((i) => String(i.instance_id).slice(SUPERVISOR_PREFIX.length)))].sort();
+  const leaderShort = canonicalShort(String(leaderHost ?? ''));
+  const backups = hosts.filter((h) => h !== leaderShort);
+  return { hosts, backups };
+}
+
+// #6 coverage visibility: read the bus roster, count the supervisors that provide failover
+// capacity, and call out the SPOF state so it is observable BEFORE a 2am outage — not during one.
+async function reportCoverage(leader, token) {
+  let instances = [];
+  try {
+    const r = await fetch(leader.base + '/api/instances', { headers: { Authorization: 'Bearer ' + token } });
+    if (r.ok) instances = (await r.json()).instances || [];
+  } catch { /* fail-soft: coverage is advisory */ }
+
+  const { hosts, backups } = failoverCoverage(instances, leader.host);
+
+  if (!hosts.length) {
+    console.log('SUPERVISORS: none registered — coverage unknown (no supervisor has reported in). ' +
+      'Run `cc-bus ensure` on your boxes, or set CC_AUTO_SUPERVISOR=1 to auto-start one per session.');
+    return;
+  }
+  console.log(`SUPERVISORS: ${hosts.length} online — ${hosts.join(', ')}`);
+  if (backups.length >= 1) {
+    console.log(`FAILOVER CAPACITY: OK — ${backups.length} standby host(s) can take over: ${backups.join(', ')}`);
+  } else {
+    console.log('⚠️  SINGLE POINT OF FAILURE — only the leader host runs a supervisor. If it dies the bus ' +
+      'goes leaderless. Start a supervisor on a SECOND box (`cc-bus ensure`).');
   }
 }
 
@@ -479,18 +677,29 @@ function tailscaleIpForHost(host) {
 
 function argOf(args, name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null; }
 
-// --- main ---
-const [cmd, ...rest] = process.argv.slice(2);
-switch (cmd) {
-  case 'start': await cmdStart(); break;
-  case 'status': await cmdStatus(); break;
-  case 'receive': await cmdReceive(rest); break;
-  case 'migrate': await cmdMigrate(rest); break;
-  default:
-    console.log('usage: cc-bus <start|status|receive|migrate>\n' +
-      '  start                        elect + supervise (leader if none present, else client)\n' +
-      '  status                       print the current authoritative leader\n' +
-      '  receive [--port N]           standby on a migration target\n' +
-      '  migrate --to <host> --confirm  move the live bus to <host>');
-    process.exit(cmd ? 1 : 0);
+// Exported for the test suite (the singleton decision logic + the coverage host-matching). The
+// CLI runs only when this file is executed directly (below), so importing it for a test is inert.
+export { supervisorLive, pidAlive, SUPERVISOR_FILE };
+// (failoverCoverage is exported at its definition above.)
+
+// --- main (only when run directly, not when imported by a test) ---
+const invokedDirectly =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedDirectly) {
+  const [cmd, ...rest] = process.argv.slice(2);
+  switch (cmd) {
+    case 'start': await cmdStart(); break;
+    case 'ensure': cmdEnsure(); break;
+    case 'status': await cmdStatus(); break;
+    case 'receive': await cmdReceive(rest); break;
+    case 'migrate': await cmdMigrate(rest); break;
+    default:
+      console.log('usage: cc-bus <start|ensure|status|receive|migrate>\n' +
+        '  start                        elect + supervise (leader if none present, else client)\n' +
+        '  ensure                       start a supervisor here ONLY if one is not already running (idempotent)\n' +
+        '  status                       print the current leader + estate failover coverage\n' +
+        '  receive [--port N]           standby on a migration target\n' +
+        '  migrate --to <host> --confirm  move the live bus to <host>');
+      process.exit(cmd ? 1 : 0);
+  }
 }

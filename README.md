@@ -48,12 +48,14 @@ distributed lock, self-hosting + failover, and an operator console**.
 ```sh
 npm ci                       # installs express + better-sqlite3 (v12; node 18+/24 OK)
 node cc-bus.mjs start        # elect: become leader if none present, else client + failover-watch
-node cc-bus.mjs status       # who is the authoritative leader right now
+node cc-bus.mjs ensure       # idempotent: start a supervisor here only if one isn't already running
+node cc-bus.mjs status       # the authoritative leader + estate failover coverage
 ```
 
 Per host, run `cc-bus start` as a small daemon (systemd unit on Linux, Scheduled
-Task / nssm on Windows). The `cc-join.sh` SessionStart hook stays advisory; its register
-+ Monitor base now come from discovery.
+Task / nssm on Windows) — or set `CC_AUTO_SUPERVISOR=1` and let each session's `cc-join.sh`
+hook `cc-bus ensure` one for you (see **Self-healing supervisors + coverage**). The `cc-join.sh`
+SessionStart hook otherwise stays advisory; its register + Monitor base come from discovery.
 
 ## Enrolling a new Claude Code CLI install
 
@@ -66,7 +68,7 @@ self-contained.
 
 | file | role |
 |---|---|
-| `cc-bus.mjs` | **Supervisor + control CLI**: `start` (elect/supervise/failover), `status`, `receive` (standby target), `migrate`. |
+| `cc-bus.mjs` | **Supervisor + control CLI**: `start` (elect/supervise/failover), `ensure` (idempotent per-machine supervisor), `status` (leader + failover coverage), `receive` (standby target), `migrate`. |
 | `cc-discover.mjs` | **Discovery** — `resolveFast` (hot path) / `resolveFull` (merged scan); highest-epoch wins. Every client script imports it. |
 | `cc-beacon.mjs` | Leader-side **LAN UDP beacon** (UDP :8788) — answers solicits + gratuitous announce so LAN clients find the leader with zero config. |
 | `server/` | The bus server: `server.mjs` (HTTP+WS, bearer + admin auth, rate limits), `db.mjs` (SQLite store), `rest-api.mjs` (the `/api` surface + work board), `ws-hub.mjs` (WebSocket push), `openapi.json`. Endpoints: `/cc/whoami` (public beacon), admin-gated `/cc/export` + `/cc/stepdown`, authed `/api/*`, and `/cc/ws`. |
@@ -80,7 +82,7 @@ self-contained.
 | `cc-console.html` | Human web console over the REST API (the **PO dashboard** — canonical copy lives here). |
 | `skill/SKILL.md` | Vendored `cross-claude` skill (copy to `~/.claude/skills/cross-claude/` on enrol). |
 | `ENROLLMENT.md` | Step-by-step to wire a new Claude Code CLI install onto the bus. |
-| `test/*.test.mjs` | Regression suite (`npm test`): render/wrap + addressed filter · db (storage + atomic claim) · rest (API + work board) · server (auth/admin/limits + real integration) · WS push + backfill · discovery/highest-epoch. |
+| `test/*.test.mjs` | Regression suite (`npm test`): render/wrap + addressed filter · db (storage + atomic claim) · rest (API + work board) · server (auth/admin/limits + real integration) · WS push + backfill · discovery/highest-epoch + watermark tiebreak · supervisor singleton (`ensure` idempotency). |
 
 ## Real-time push (WebSocket) + cursor backfill
 
@@ -112,10 +114,17 @@ the notification edge.)
 
 Authority is a monotonic **epoch** persisted in `~/.cross-claude-mcp/epoch` next to the DB
 and **carried with the DB on migration**. `GET /cc/whoami` (unauthenticated — advertises
-host/epoch/base only, never a secret) is the beacon. Discovery merges every responder and
-picks the highest epoch (tiebreak: lexicographically lowest host). A migrated host starts at
-`epoch+1`, so it wins over any stale server; a supervisor that sees a higher-epoch peer
-steps down.
+host/epoch/base plus a data **watermark** and the running code **rev**, never a secret) is the
+beacon. Discovery merges every responder and picks the winner by the single `outranks()`
+ordering: **highest epoch**, then — at an equal epoch — the **highest watermark** (the freshest
+snapshot), then the lexicographically-lowest host. A migrated host starts at `epoch+1`, so it
+wins over any stale server; a supervisor that sees a peer outrank it steps down.
+
+The **watermark** is the highest message id the leader has served (tracked in memory, so
+`/cc/whoami` never hits the DB). It makes an equal-epoch election pick the branch that took the
+**most writes** — so a stale leader returning after an outage can't clobber the fresher history a
+standby was promoted onto (**most-writes-win**, a deterministic policy strictly better than the
+old arbitrary hostname tie).
 
 **Repointing is automatic.** After a migration the old leader steps down (its base goes
 dead), so each client's fast path falls through to a full scan and re-caches the new
@@ -128,6 +137,36 @@ the leader's epoch. So when the leader vanishes and this node auto-promotes, it 
 **recent** copy of the bus — message loss is bounded to the replication interval instead of the
 unbounded loss of promoting on a stale/empty local DB. (A planned `migrate` still transfers the
 DB exactly; this only covers *unplanned* failover.)
+
+**Empty-snapshot guard.** A node with **no local DB at all** (never led, never replicated) will
+not promote over a live leader that discovery merely hadn't found yet — it does one final full
+scan and joins as a client if any leader answers. Only a genuinely alone node bootstraps a fresh
+(empty) bus, and it says so loudly. Combined with the watermark tiebreak above, a returning stale
+node can neither blank the bus nor overwrite fresher history.
+
+## Self-healing supervisors + coverage
+
+The bus is only as available as the hosts running a supervisor. To stop the "sole leader dies →
+bus blacks out until someone hand-runs `cc-bus start`" outage:
+
+- **`cc-bus ensure`** starts a supervisor on this box **only if one is not already running here**
+  (idempotent). Liveness is a heartbeat file (`~/.cross-claude-mcp/supervisor.json`) checked by a
+  fresh timestamp **and** a live pid (`process.kill(pid,0)`, cross-platform), and an atomic lock
+  serializes concurrent session-starts so **exactly one** supervisor runs per machine. It is fast
+  (no network) and fail-soft.
+- **Opt-in auto-start.** Set `CC_AUTO_SUPERVISOR=1` in `~/.claude/.cross-claude-bus` and the
+  SessionStart hook (`cc-join.sh`) runs `cc-bus ensure` — so any box with a live session has
+  failover capacity by construction. It is **default-OFF** so the estate's failover behaviour only
+  changes when you turn it on.
+- **Coverage visibility.** Every supervisor registers on the bus (`cc-bus-supervisor/<host>`,
+  heartbeated), so **`cc-bus status`** reports the online supervisors, their hosts, and the
+  **failover capacity** — the standby hosts other than the leader's. It calls out a **single point
+  of failure** (only the leader host has a supervisor) *before* an outage, not during one.
+
+Residual (by design): a host's supervisor stays down between its own death (e.g. OOM) and that
+host's next session start (the re-ensure cadence); cross-host redundancy (≥2 boxes each ensuring)
+covers the bus in the meantime. A heavier always-on OS service (systemd / Scheduled Task) is the
+alternative this hook-ensured approach deliberately trades away for simplicity.
 
 ## Migration
 
@@ -152,6 +191,10 @@ Each machine reads `~/.claude/.cross-claude-bus` for `CC_TOKEN` (required) and o
   dead pin escalates to the scan.
 - `CC_PEERS` — csv of `host:port` static hints for headless/edge nodes with no Tailscale.
 - `CC_PORT` (default 8787) · `CC_BEACON_PORT` (default 8788).
+- `CC_AUTO_SUPERVISOR` — `1` makes each session's `cc-join.sh` `cc-bus ensure` a supervisor on
+  this box (default off; see **Self-healing supervisors + coverage**).
+- `CC_REPLICATE_MS` (default 30000) — how often a client pulls the leader's snapshot; also the
+  bound on unplanned-failover message loss.
 
 Opt-in per machine (the join hook no-ops if the file is absent) and **git-ignored** — the
 token never belongs in version control. Firewall: allow inbound **TCP 8787** + **UDP 8788**

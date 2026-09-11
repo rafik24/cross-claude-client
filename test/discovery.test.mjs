@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { whoami, resolveFull, resolveFast, cacheLeader } from '../cc-discover.mjs';
+import { whoami, resolveFull, resolveFast, cacheLeader, outranks } from '../cc-discover.mjs';
 import { createServer as createNetServer } from 'node:net';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -90,7 +90,39 @@ try {
   assert.ok(fast, 'resolveFast found a leader');
   assert.equal(fast.epoch, 9, 'resolveFast picks the HIGHEST epoch (cache 9 > pin 3), not the first responder');
 
-  console.log('✅ discovery.test: all assertions passed (whoami, dead→null, resolveFull highest-epoch, resolveFast epoch-aware)');
+  // --- #7 election ordering: outranks() (epoch, then watermark, then host) --------------------
+  // Higher epoch always wins, even with a LOWER watermark (epoch is the term authority).
+  assert.equal(outranks({ epoch: 2, watermark: 0, host: 'z' }, { epoch: 1, watermark: 999, host: 'a' }), true,
+    'higher epoch beats higher watermark');
+  // Equal epoch: the FRESHER snapshot (higher watermark) wins — the #7 stale-DB fix. This is the
+  // assertion that would go red if the watermark tiebreak were dropped back to hostname-only.
+  assert.equal(outranks({ epoch: 5, watermark: 42, host: 'zzz' }, { epoch: 5, watermark: 41, host: 'aaa' }), true,
+    'equal epoch → higher watermark wins (over a lexicographically-lower host)');
+  assert.equal(outranks({ epoch: 5, watermark: 41, host: 'aaa' }, { epoch: 5, watermark: 42, host: 'zzz' }), false,
+    'equal epoch → lower watermark loses even with a lower host');
+  // Equal epoch AND watermark: fall back to the lexicographically-lowest host (deterministic).
+  assert.equal(outranks({ epoch: 5, watermark: 7, host: 'aaa' }, { epoch: 5, watermark: 7, host: 'bbb' }), true,
+    'equal epoch+watermark → lowest host wins');
+  // A missing watermark is treated as 0 (back-compat with an older leader that omits it).
+  assert.equal(outranks({ epoch: 5, host: 'aaa' }, { epoch: 5, watermark: 1, host: 'aaa' }), false,
+    'absent watermark treated as 0 → loses to watermark 1');
+
+  // --- watermark + rev carried on /cc/whoami (integration) ------------------------------------
+  // A fresh leader reports watermark 0; after a message lands the watermark advances, so an
+  // election can rank by real write-freshness. rev is present so drift detection still works.
+  const w0 = await whoami('http://127.0.0.1:8792');
+  assert.equal(w0.watermark, 0, 'fresh leader whoami reports watermark 0');
+  assert.ok('rev' in w0, 'whoami carries a rev field (drift detection)');
+  const post = await fetch('http://127.0.0.1:8792/api/messages', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer tt', 'content-type': 'application/json' },
+    body: JSON.stringify({ channel: 'general', sender: 'disc-test', content: 'bump the watermark' }),
+  });
+  assert.equal(post.status, 200, 'message posted');
+  const w1 = await whoami('http://127.0.0.1:8792');
+  assert.ok(w1.watermark >= 1, `whoami watermark advances after a message (got ${w1.watermark})`);
+
+  console.log('✅ discovery.test: all assertions passed (whoami, dead→null, resolveFull highest-epoch, resolveFast epoch-aware, outranks watermark-tiebreak, whoami watermark+rev)');
 } catch (e) {
   failed = true;
   console.error('❌ discovery.test FAILED:', e.message);

@@ -46,7 +46,20 @@ if command -v cygpath >/dev/null 2>&1; then
 fi
 
 # shellcheck disable=SC1090
-. "$CFG"                       # CC_TOKEN, and CC_BASE only if manually PINNED (usually absent)
+. "$CFG"                       # CC_TOKEN, CC_AUTO_SUPERVISOR, and CC_BASE only if manually PINNED
+
+# --- self-healing supervisor (#6, approach B) -----------------------------------------------------
+# Ensure exactly one `cc-bus` supervisor runs on this box, so any machine with a live Claude session
+# has failover capacity by construction (the fix for "sole leader dies → bus blacks out"). This is
+# OPT-IN via CC_AUTO_SUPERVISOR=1 in the config, so it stays INERT on the estate until the PO turns
+# it on after testing. `cc-bus ensure` is idempotent (no-op if a supervisor is already live here),
+# fast (no network — just a pid/heartbeat check + a detached spawn) and fail-soft. Run FOREGROUND
+# (not backgrounded): it must finish spawning the detached supervisor before this hook exits, or the
+# hook's exit could kill it first — and it returns in well under a second.
+if [ "${CC_AUTO_SUPERVISOR:-0}" = "1" ] && [ -f "$HERE/cc-bus.mjs" ]; then
+  sup_msg="$(node "$HERE/cc-bus.mjs" ensure 2>/dev/null || true)"
+  [ -n "$sup_msg" ] && echo "🩺 SELF-HEALING SUPERVISOR — $sup_msg"
+fi
 
 # A discovery-based enrollment deliberately OMITS CC_BASE (ENROLLMENT.md §3/§5): the bus has no
 # fixed IP, so the leader is DISCOVERED, not pinned. Every cc-*.mjs client already does this via

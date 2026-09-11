@@ -72,17 +72,42 @@ export async function whoami(base, timeoutMs = 1500) {
     const j = await r.json();
     if (typeof j.epoch !== 'number') return null;
     // Canonical base = the address WE dialed (guaranteed reachable from here), not what the
-    // server guesses. host/epoch/rev come from the server.
-    return { base, host: j.host, epoch: j.epoch, role: j.role || 'leader', rev: j.rev || null, dirty: !!j.dirty };
+    // server guesses. host/epoch/rev/watermark come from the server. watermark is the highest
+    // message id served — a freshness proxy the election uses to break an equal-epoch tie.
+    return {
+      base, host: j.host, epoch: j.epoch, role: j.role || 'leader',
+      rev: j.rev || null, dirty: !!j.dirty,
+      watermark: typeof j.watermark === 'number' ? j.watermark : 0,
+    };
   } catch { return null; }
   finally { clearTimeout(t); }
 }
 
-// pick highest epoch; tiebreak lexicographically lowest host id (deterministic).
+// Election ordering, single source of truth (used by pickAuthoritative here AND cc-bus's
+// leader-monitor step-down, so they can never disagree and split-brain):
+//   1. HIGHEST election epoch          — the term authority; a migration always bumps it.
+//   2. then HIGHEST watermark          — #7: among standbys forked from a common snapshot and
+//                                        racing to promote at the SAME epoch, the branch that
+//                                        took the most writes (highest message id) wins, so a
+//                                        stale returning leader can't clobber fresher history.
+//                                        "most-writes-win" — a defensible, deterministic policy
+//                                        strictly better than the old arbitrary hostname tie.
+//   3. then lexicographically LOWEST host — final deterministic tiebreak (equal epoch+watermark).
+// Returns true when `a` should beat `b`.
+export function outranks(a, b) {
+  if (!b) return !!a;
+  if (!a) return false;
+  if (a.epoch !== b.epoch) return a.epoch > b.epoch;
+  const aw = a.watermark ?? 0, bw = b.watermark ?? 0;
+  if (aw !== bw) return aw > bw;
+  return String(a.host).localeCompare(String(b.host)) < 0;
+}
+
+// pick the authoritative leader among responders per the outranks() ordering.
 function pickAuthoritative(responders) {
   const live = responders.filter(Boolean);
   if (!live.length) return null;
-  live.sort((a, b) => (b.epoch - a.epoch) || String(a.host).localeCompare(String(b.host)));
+  live.sort((a, b) => (outranks(a, b) ? -1 : outranks(b, a) ? 1 : 0));
   return live[0];
 }
 

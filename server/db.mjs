@@ -336,6 +336,15 @@ export async function createDB() {
       return a.get(`SELECT * FROM messages WHERE id = ?`, [id]);
     },
 
+    // Highest message id in the store, or 0 when empty. Used as a monotonic DATA WATERMARK
+    // (a freshness proxy) so a leader election among standbys that forked from a common
+    // snapshot picks the branch that took the MOST writes — not an arbitrary hostname tie.
+    // MAX(id) on the AUTOINCREMENT PK is an O(1) index probe, so it is cheap to read at boot.
+    async maxMessageId() {
+      const row = await a.get(`SELECT COALESCE(MAX(id), 0) AS m FROM messages`);
+      return Number(row?.m ?? 0);
+    },
+
     async getReplies(messageId) {
       return a.all(`SELECT * FROM messages WHERE in_reply_to = ? ORDER BY id ASC`, [messageId]);
     },
