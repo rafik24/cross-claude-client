@@ -3,7 +3,7 @@
 // notification wrapping that fixes DM truncation.
 //   node test/render.test.mjs
 import assert from 'node:assert';
-import { addressedTo, isAtAll, renderLine, wrapForNotification, WRAP_WIDTH, MAX_LINES_PER_BLOCK } from '../cc-render.mjs';
+import { addressedTo, isAtAll, renderLine, wrapForNotification, WRAP_WIDTH, MAX_LINES_PER_BLOCK, canonicalShort, shortIdOf } from '../cc-render.mjs';
 
 let failed = false;
 const ok = (cond, msg) => { try { assert.ok(cond, msg); } catch (e) { failed = true; console.error('❌', e.message); } };
@@ -20,6 +20,19 @@ ok(!addressedTo({ channel: 'general', content: 'chatter between others' }, me), 
 ok(!addressedTo({ channel: 'dm-someone-else', content: 'x' }, me), "another lane's DM is NOT addressed to me");
 ok(isAtAll('please @everyone'), '@everyone detected');
 ok(!isAtAll('email@example.com'), 'a bare email is not @all');
+
+// --- #5: one canonical short name, so id.short == dm-<short> channel byte for byte ---
+eq(canonicalShort('Foo_Bar'), 'foo-bar', 'underscore + uppercase canonicalize');
+eq(canonicalShort('ubuntu_24_04'), 'ubuntu-24-04', 'underscores -> dashes');
+eq(canonicalShort('ubuntu-24-04'), 'ubuntu-24-04', 'already-canonical is stable (idempotent)');
+eq(canonicalShort('a..b--c'), 'ab-c', 'dots dropped, dashes collapsed');
+eq(shortIdOf('winbox/reclaim_offline'), 'reclaim-offline', 'shortIdOf canonicalizes the short name');
+// THE bug: the server normalizes a posted channel, so a DM to an underscore id lands on
+// `dm-reclaim-offline`; addressedTo must match it (it used to only match `dm-reclaim_offline`).
+ok(addressedTo({ channel: 'dm-reclaim-offline', content: 'hi' }, 'winbox/reclaim_offline'),
+  '#5: a dm to the canonical channel reaches an underscore-named session');
+ok(!addressedTo({ channel: 'dm-someone-else', content: 'x' }, 'winbox/reclaim_offline'),
+  "a different lane's dm is still not addressed");
 
 // --- wrapForNotification: short message = exactly one block, one line, no decoration ---
 {

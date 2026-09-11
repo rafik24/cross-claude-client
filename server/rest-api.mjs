@@ -13,6 +13,19 @@
 
 import express from 'express';
 import { WORK_STATES, WORK_KINDS, normalizeChannelName } from './db.mjs';
+import { canonicalShort } from '../cc-render.mjs';
+
+// Canonicalize an identity's short name server-side (#5): whatever a client registers, the
+// stored/advertised `host/<short>` has its short normalized the SAME way a dm-<short> channel is,
+// so id == dm-channel byte-for-byte. The host part is left as-is (only the short drives dm routing).
+function canonicalizeIdentity(id) {
+  const s = String(id);
+  const slash = s.lastIndexOf('/');
+  if (slash < 0) return canonicalShort(s) || s;
+  const host = s.slice(0, slash);
+  const short = canonicalShort(s.slice(slash + 1));
+  return short ? `${host}/${short}` : s;
+}
 
 // Accepted values for a message's message_type field. This is the wire vocabulary
 // for chatter on a channel and is unrelated to the work-board's kinds/states.
@@ -82,8 +95,11 @@ export function createRestRouter(db) {
     run(async (req, res) => {
       const { instance_id, description, rev } = req.body || {};
       if (!isFilledString(instance_id)) return reject(res, 'instance_id is required');
-      await db.registerInstance(instance_id, description ?? null, rev ?? null);
-      res.json({ ok: true, instance_id });
+      // #5 backstop: canonicalize the short name so a rejoin re-attaches its dm channel and no
+      // slug variant forks a duplicate peer. The response echoes the canonical id the client holds.
+      const canonical = canonicalizeIdentity(instance_id);
+      await db.registerInstance(canonical, description ?? null, rev ?? null);
+      res.json({ ok: true, instance_id: canonical });
     })
   );
 

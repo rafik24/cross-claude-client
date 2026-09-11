@@ -77,7 +77,10 @@ machine=$(hostname 2>/dev/null | tr 'A-Z' 'a-z' | tr -c 'a-z0-9._-' '-'); machin
 branch=$(git -C "$PWD" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
 topic="${branch##*/}"
 { [ -z "$topic" ] || [ "$topic" = "HEAD" ]; } && topic="$(basename "$PWD")"
-topic=$(printf '%s' "$topic" | tr -c 'A-Za-z0-9._-' '-'); topic="${topic%-}"
+# Canonical short name — MUST match cc-render.canonicalShort + the server's channel normalizer
+# (lowercase · spaces/underscores -> '-' · drop anything outside [a-z0-9-] · collapse · trim), so the
+# minted id's short == its dm-<short> channel and a rejoin re-attaches instead of forking (#5).
+topic=$(printf '%s' "$topic" | tr 'A-Z' 'a-z' | sed 's/[[:space:]_]\{1,\}/-/g; s/[^a-z0-9-]//g; s/-\{1,\}/-/g; s/^-//; s/-$//')
 [ -n "$topic" ] || topic="misc"
 short="$(printf '%s' "$SID" | cut -c1-8)"
 if [ -n "$short" ]; then ID="$machine/$topic-$short"; else ID="$machine/$topic"; fi

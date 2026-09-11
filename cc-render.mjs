@@ -28,8 +28,25 @@
 export const WRAP_WIDTH = 400;
 export const MAX_LINES_PER_BLOCK = 6;
 
+// The ONE canonical normalizer for an identity's short name (the part after `host/`), and the
+// dm-<short> channel derived from it. It MUST match how the server normalizes a channel name
+// (normalizeChannelName in server/db.mjs): lowercase · spaces/underscores -> '-' · drop anything
+// outside [a-z0-9-] · collapse repeats · trim. Why this matters (issue #5): the server normalizes
+// a posted channel (so `dm-foo_bar` is stored as `dm-foo-bar`), but a raw short name kept `foo_bar`
+// — so addressedTo matched `dm-foo_bar` and MISSED the stored `dm-foo-bar` → silently dropped DMs,
+// and slug variants (`x_1` vs `x-1`) forked into separate peers. Routing every identity short name
+// through this one function (here, at mint, at registration) keeps id == dm-channel, byte for byte.
+export function canonicalShort(short) {
+  return String(short || '')
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export function shortIdOf(identity) {
-  return String(identity || '').split('/').pop();
+  return canonicalShort(String(identity || '').split('/').pop());
 }
 
 // @all / @here / @everyone — the deliberate broadcast-to-every-session escape hatch.

@@ -25,6 +25,7 @@ import { homedir, hostname } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveFast, loadConfig } from './cc-discover.mjs';
+import { canonicalShort } from './cc-render.mjs';
 import { revString } from './cc-rev.mjs';
 
 const a = process.argv.slice(2);
@@ -42,8 +43,10 @@ const TOKEN = process.env.CC_TOKEN || cfg.token;
 const leader = await resolveFast({ pin: process.env.CC_BASE || cfg.pin, token: TOKEN });
 const BASE = leader ? leader.base : null;
 
-// slug: lowercase, non-[a-z0-9._-] -> '-', collapse, trim, cap 48. Matches cc-join.sh's charset.
-const slug = (s) => (s.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48).replace(/-+$/, '')) || 'misc';
+// slug: the ONE canonical short-name normalizer (cc-render.canonicalShort == the server's channel
+// normalizer), capped at 48. This guarantees the minted id's short == its dm-<short> channel, so a
+// rejoin under the same title re-attaches the same DM channel instead of forking a variant (#5).
+const slug = (s) => (canonicalShort(s).slice(0, 48).replace(/-+$/, '')) || 'misc';
 const host = (hostname().toLowerCase().replace(/[^a-z0-9._-]/g, '-').replace(/-+$/, '')) || 'unknown';
 const id = `${host}/${slug(title)}`;
 
