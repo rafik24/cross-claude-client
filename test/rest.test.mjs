@@ -270,15 +270,28 @@ async function main() {
     assert.equal(body.owner, 'sessionA', '409 reports the holding owner');
     assert.equal(body.item.owner, 'sessionA', 'the item is unchanged by the lost claim');
 
-    // the owner advances the state
-    res = await jsonPost(`${base}/work/${workId}/state`, { state: 'implementing' });
-    assert.equal(res.status, 200, 'advancing state should succeed');
+    // F4 owner-gate: only the CURRENT OWNER (sessionA) may change a claimed item's state.
+    res = await jsonPost(`${base}/work/${workId}/state`, { state: 'implementing', by: 'sessionA' });
+    assert.equal(res.status, 200, 'the owner advancing state should succeed');
     body = await res.json();
     assert.equal(body.item.state, 'implementing');
 
-    // 3) invalid state -> 400 --------------------------------------------------
+    // a NON-owner (sessionB) changing the same claimed item is refused with 403 not_owner
+    res = await jsonPost(`${base}/work/${workId}/state`, { state: 'deployed', by: 'sessionB' });
+    assert.equal(res.status, 403, 'a non-owner changing a claimed item state should be 403');
+    body = await res.json();
+    assert.equal(body.reason, 'not_owner', '403 carries a machine-readable reason');
+    assert.equal(body.owner, 'sessionA', '403 reports the holding owner');
+
+    // 3) invalid state -> 400 (validation runs before the owner-gate) ----------
     res = await jsonPost(`${base}/work/${workId}/state`, { state: 'not-a-real-state' });
     assert.equal(res.status, 400, 'an invalid state should be 400');
+
+    // an UNOWNED item's state is open to anyone (no owner to protect) -> 200
+    res = await jsonPost(`${base}/work`, { title: 'unowned' });
+    const unownedId = (await res.json()).item.id;
+    res = await jsonPost(`${base}/work/${unownedId}/state`, { state: 'blocked', by: 'anyone' });
+    assert.equal(res.status, 200, 'setting state on an unowned item should succeed');
 
     // extra guardrails: claim on a missing item -> 404; bad kind on create -> 400
     res = await jsonPost(`${base}/work/999999/claim`, { owner: 'x' });

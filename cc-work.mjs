@@ -35,9 +35,9 @@ function usage(msg) {
   cc-work show <id>
   cc-work add "<title>" [--project P] [--ref R] [--epic <parent_id>] [--kind K] [--domain D] [--by <id>]
   cc-work claim <id> --as <session-id>
-  cc-work advance <id> --to <state>       (state: ${WORK_STATES.join(" | ")})
-  cc-work handoff <id> --to <session-id>
-  cc-work release <id>
+  cc-work advance <id> --to <state> [--as <owner>]   (state: ${WORK_STATES.join(" | ")})
+  cc-work handoff <id> --to <session-id> [--as <owner>]
+  cc-work release <id> [--as <owner>]
 
   global: --base <url> (discovery seed) · --pin <url> (HARD pin, no discovery/election) · --token <t>`);
   process.exit(2);
@@ -149,25 +149,29 @@ switch (cmd) {
     break;
   }
   case "advance": {
-    const id = positional[0]; const to = opt("--to");
-    if (!id || !to) usage("advance needs <id> --to <state>");
+    const id = positional[0]; const to = opt("--to"); const as = opt("--as");
+    if (!id || !to) usage("advance needs <id> --to <state> [--as <session-id>]");
     if (!WORK_STATES.includes(to)) usage(`unknown state "${to}" (want: ${WORK_STATES.join(" | ")})`);
-    const { ok, status, json } = await api("POST", "/work/" + id + "/state", { state: to });
+    const { ok, status, json } = await api("POST", "/work/" + id + "/state", { state: to, by: as });
+    if (status === 409 || status === 403) { console.error(`✗ #${id} is owned by @${json.owner} — only the owner can change its state (pass --as <your-id> if that's you).`); process.exit(1); }
     if (!ok) { console.error("advance failed:", status, json.error || ""); process.exit(1); }
     console.log("→ " + renderItem(json.item).trim());
     break;
   }
   case "handoff": {
-    const id = positional[0]; const to = opt("--to");
-    if (!id || !to) usage("handoff needs <id> --to <session-id>");
-    const { ok, status, json } = await api("POST", "/work/" + id + "/handoff", { owner: to });
+    const id = positional[0]; const to = opt("--to"); const as = opt("--as");
+    if (!id || !to) usage("handoff needs <id> --to <session-id> [--as <session-id>]");
+    const { ok, status, json } = await api("POST", "/work/" + id + "/handoff", { owner: to, by: as });
+    if (status === 403) { console.error(`✗ #${id} is owned by @${json.owner} — only the owner can hand it off (pass --as <your-id>).`); process.exit(1); }
     if (!ok) { console.error("handoff failed:", status, json.error || ""); process.exit(1); }
     console.log("→ handed #" + id + " to @" + to + " — they must ACK. " + renderItem(json.item).trim());
     break;
   }
   case "release": {
-    const id = positional[0]; if (!id) usage("release needs <id>");
-    const { ok, status, json } = await api("POST", "/work/" + id + "/handoff", { owner: null });
+    const id = positional[0]; const as = opt("--as");
+    if (!id) usage("release needs <id> [--as <session-id>]");
+    const { ok, status, json } = await api("POST", "/work/" + id + "/handoff", { owner: null, by: as });
+    if (status === 403) { console.error(`✗ #${id} is owned by @${json.owner} — only the owner can release it (pass --as <your-id>).`); process.exit(1); }
     if (!ok) { console.error("release failed:", status, json.error || ""); process.exit(1); }
     console.log("↩ released #" + id + " back to the pool. " + renderItem(json.item).trim());
     break;

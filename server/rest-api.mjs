@@ -372,6 +372,12 @@ export function createRestRouter(db) {
       const existing = await db.getWorkItem(id);
       if (!existing) return notFound(res, 'work item not found');
 
+      // Owner-gate (F4): only the current owner may hand off or release an OWNED item; an unowned
+      // item can be assigned by anyone. `by` is the caller's id (cooperative guard, see /state).
+      const by = (req.body || {}).by;
+      if (existing.owner && by !== existing.owner) {
+        return res.status(403).json({ error: 'not the owner', reason: 'not_owner', owner: existing.owner });
+      }
       // An empty/absent owner releases the item (owner -> null); state is preserved.
       const raw = (req.body || {}).owner;
       const newOwner = isFilledString(raw) ? raw : null;
@@ -385,12 +391,20 @@ export function createRestRouter(db) {
     run(async (req, res) => {
       const id = toCount(req.params.id);
       if (id === undefined) return reject(res, 'a numeric work id is required');
-      const { state } = req.body || {};
+      const { state, by } = req.body || {};
       if (!isFilledString(state) || !WORK_STATES.includes(state)) {
         return reject(res, `state must be one of: ${WORK_STATES.join(', ')}`);
       }
       const existing = await db.getWorkItem(id);
       if (!existing) return notFound(res, 'work item not found');
+      // Owner-gate (F4): only the CURRENT OWNER may change a claimed item's state, so a claim
+      // actually protects the item's lifecycle. Transitions themselves stay FREE (any legal state,
+      // incl. blocked/revert — agents know their workflow better than a hardcoded pipeline). An
+      // UNOWNED item is open to anyone. `by` is a cooperative coordination guard, NOT a security
+      // boundary: every agent shares the token, so it is deliberately not spoof-proof.
+      if (existing.owner && by !== existing.owner) {
+        return res.status(403).json({ error: 'not the owner', reason: 'not_owner', owner: existing.owner });
+      }
       const item = await db.setWorkItemState(id, state);
       res.json({ ok: true, item });
     })
