@@ -14,7 +14,7 @@
   *{box-sizing:border-box} html,body{margin:0;height:100%}
   body{background:var(--bg);color:var(--text);font-family:var(--sans);display:grid;
        grid-template-columns:280px 1fr;grid-template-rows:auto auto 1fr auto;height:100vh}
-  header{grid-column:1/3;display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
   header .dot{width:9px;height:9px;border-radius:50%;background:var(--dim)} header .dot.on{background:var(--online)} header .dot.off{background:#f85149}
   header h1{font-size:13px;margin:0;font-weight:600}
   header label{font-size:11px;color:var(--dim);margin-left:6px}
@@ -24,12 +24,12 @@
   header button#connect:hover{filter:brightness(1.08)}
   header .meta{color:var(--dim);font-size:11px;font-family:var(--mono);margin-left:auto}
   /* settings strip */
-  .settings{grid-column:1/3;display:flex;align-items:center;gap:14px;padding:5px 14px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;font-size:11px;color:var(--dim)}
+  .settings{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:5px 14px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;font-size:11px;color:var(--dim)}
   .settings label{display:flex;align-items:center;gap:5px}
   .settings input[type=number]{width:52px;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:5px;padding:3px 5px;font-size:11px;font-family:var(--mono)}
   .settings input#peers{width:150px;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:5px;padding:3px 6px;font-size:11px;font-family:var(--mono)}
   .settings .sw{display:flex;align-items:center;gap:5px;cursor:pointer}
-  .banner{grid-column:1/3;background:rgba(240,136,62,.12);border-bottom:1px solid var(--warn);color:var(--warn);padding:6px 14px;font-size:12px;display:none}
+  .banner{grid-column:1/-1;background:rgba(240,136,62,.12);border-bottom:1px solid var(--warn);color:var(--warn);padding:6px 14px;font-size:12px;display:none}
   .banner.show{display:block} .banner b{color:var(--text)}
   aside{grid-row:3/5;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:10px}
   aside h2{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);margin:6px 6px 8px;display:flex;justify-content:space-between}
@@ -72,6 +72,41 @@
   #mentions .mi .pip{width:7px;height:7px;border-radius:50%;background:var(--online);flex:none} #mentions .mi.off .pip{background:var(--dim)}
   #mentions .mi.active{background:var(--accent);color:#06121f} #mentions .mi small{color:var(--dim);margin-left:auto}
   #mentions .mi.active small{color:#06121f}
+  /* ---- work board (read-only, third column) ------------------------------ */
+  body.board-on{grid-template-columns:280px minmax(0,1fr) minmax(340px,440px)}
+  #boardpanel{grid-column:3/4;grid-row:3/5;display:none;flex-direction:column;background:var(--panel);border-left:1px solid var(--line);overflow:hidden}
+  body.board-on #boardpanel{display:flex}
+  #boardpanel .wb-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);flex:none}
+  #boardpanel .wb-head h2{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);margin:0}
+  #boardpanel .wb-head .wb-meta{margin-left:auto;font-size:10px;color:var(--dim);font-family:var(--mono)}
+  .wb-summary{padding:6px 12px;font-size:11px;color:var(--dim);border-bottom:1px solid var(--line);font-family:var(--mono);flex:none}
+  .wb-list{flex:1;overflow-y:auto;padding:8px}
+  .wb-item{padding:6px 8px;border-radius:7px;margin-bottom:4px;background:var(--panel2);border-left:3px solid transparent;margin-left:calc(var(--d,0)*16px)}
+  .wb-item.epic{border-left-color:var(--line)}
+  .wb-item.blk{border-left-color:#f85149;background:rgba(248,81,73,.08)}
+  .wb-item.stl{border-left-color:var(--warn);background:rgba(240,136,62,.07)}
+  .wb-item.abn{opacity:.5}
+  .wb-row{display:flex;align-items:baseline;gap:7px}
+  .wb-id{font-family:var(--mono);font-size:11px;color:var(--dim);flex:none}
+  .wb-badge{font-size:9px;text-transform:uppercase;letter-spacing:.4px;padding:1px 5px;border-radius:4px;flex:none;font-family:var(--mono);background:rgba(255,255,255,.04)}
+  .wb-kind{font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--dim);flex:none;font-family:var(--mono)}
+  .wb-item.epic .wb-kind{color:var(--accent);font-weight:700}
+  .wb-title{flex:1;font-size:12px;line-height:1.4;word-break:break-word}
+  .wb-item.epic .wb-title{font-weight:600}
+  .wb-ago{font-size:10px;color:var(--dim);font-family:var(--mono);flex:none;white-space:nowrap}
+  .wb-sub{display:flex;align-items:center;gap:8px;margin-top:3px;flex-wrap:wrap;padding-left:2px}
+  .wb-owner{font-size:11px;font-family:var(--mono);color:var(--text)}
+  .wb-unowned{color:var(--dim);font-style:italic}
+  .wb-tag{font-size:10px;font-family:var(--mono);color:var(--dim);background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+  .wb-ref{color:var(--accent)}
+  .wb-chip{font-size:9px;text-transform:uppercase;letter-spacing:.4px;padding:1px 6px;border-radius:4px;font-family:var(--mono)}
+  .wb-chip.blk{background:rgba(248,81,73,.18);color:#f85149}
+  .wb-chip.stl{background:rgba(240,136,62,.18);color:var(--warn)}
+  /* per-state badge glyph/text colour */
+  .s-queued{color:var(--dim)} .s-claimed{color:var(--t-status)} .s-impl{color:var(--warn)}
+  .s-review{color:var(--t-handoff)} .s-merged{color:var(--online)} .s-deployed{color:#2dd4bf}
+  .s-blocked{color:#f85149} .s-abandoned{color:#6e7681}
+  @media (max-width:900px){ body.board-on{grid-template-columns:280px 1fr} body.board-on #boardpanel{display:none} }
 </style>
 </head>
 <body>
@@ -89,6 +124,7 @@
     <label title="Participants not seen within this window are hidden (unless 'show all').">participants active ≤ <input id="partWin" type="number" min="1" max="1440" value="15" /> min</label>
     <label class="sw" title="Show every participant, including those outside the active window."><input id="showAllParts" type="checkbox" /> show all participants</label>
     <label class="sw" title="Show every channel, including those outside the active window."><input id="showAllChans" type="checkbox" /> show all channels</label>
+    <label class="sw" title="Show the read-only work board panel on the right, grouped by epic."><input id="showBoard" type="checkbox" /> work board</label>
     <label title="Extra hosts to probe when following a moved leader (comma-separated host or host:port). The roster's own hosts are probed automatically, so this is usually only needed to seed discovery before the first connect.">peers <input id="peers" type="text" placeholder="host1, host2:8787" /></label>
     <span class="meta" id="wininfo" style="margin-left:auto"></span>
   </div>
@@ -103,6 +139,12 @@
   </aside>
 
   <main id="stream"><div class="sys">Enter the bus token (CC_TOKEN from ~/.claude/.cross-claude-bus) and click Connect. Messages stream here.</div></main>
+
+  <section id="boardpanel">
+    <div class="wb-head"><h2>Work board</h2><span class="wb-meta" id="wbmeta"></span></div>
+    <div class="wb-summary" id="wbsummary"></div>
+    <div class="wb-list" id="wboard"><div class="empty">—</div></div>
+  </section>
 
   <footer>
     <div id="mentions"></div>
@@ -136,8 +178,14 @@
   $('showAllParts').checked = cfg.showAllParts ?? !!cfg.showAll;
   $('showAllChans').checked = cfg.showAllChans ?? !!cfg.showAll;
   $('peers').value = cfg.peers || '';
+  // Work board is ON by default — the PO watches the board next to the chat. Persisted per-browser.
+  $('showBoard').checked = cfg.boardOn ?? true;
+  document.body.classList.toggle('board-on', $('showBoard').checked);
 
   let cursors = {};          // per-channel last_id seen (for message fetch)
+  let workItems = new Map(); // work board: id -> item (reconciled across polls)
+  let workCursor = null;     // max updated_at seen (drives the cheap ?updated_after fetch)
+  let workPollN = 0;         // poll counter; every 20th does a full reconcile (self-heals same-second-edge misses)
   let filter = null;         // channel filter (null = all)
   let seenIds = new Set();   // dedupe across polls
   let msgLog = [];           // every message object seen (for handoff/ack logic)
@@ -157,7 +205,7 @@
   const partWin = () => Math.max(1, Number($('partWin').value) || 15) * 60000;
   const showAllParts = () => $('showAllParts').checked;
   const showAllChans = () => $('showAllChans').checked;
-  const save = () => localStorage.setItem(LS, JSON.stringify({ base: $('base').value.trim(), token: $('token').value, me: $('me').value.trim(), chanWin: Number($('chanWin').value)||15, partWin: Number($('partWin').value)||15, showAllParts: showAllParts(), showAllChans: showAllChans(), peers: $('peers').value.trim() }));
+  const save = () => localStorage.setItem(LS, JSON.stringify({ base: $('base').value.trim(), token: $('token').value, me: $('me').value.trim(), chanWin: Number($('chanWin').value)||15, partWin: Number($('partWin').value)||15, showAllParts: showAllParts(), showAllChans: showAllChans(), peers: $('peers').value.trim(), boardOn: $('showBoard').checked }));
   const saveViewed = () => localStorage.setItem(LS + '.viewed', JSON.stringify(viewedAt));
   const base = () => $('base').value.trim().replace(/\/$/, '');
   const hdr = () => ({ 'Authorization': 'Bearer ' + $('token').value.trim() });
@@ -307,6 +355,123 @@
     $('wininfo').textContent = `${show.length}/${rows.length} channels shown`;
   }
 
+  // ---- work board (read-only) ---------------------------------------------
+  const isFilledStr = (v) => typeof v === 'string' && v.trim().length > 0;
+  // Second-granularity "updated Ns ago". Reuses tms() (UTC datetime('now') strings).
+  const agoShort = (s) => { const t = tms(s); if (!t) return ''; const sec = Math.max(0, Math.floor((Date.now()-t)/1000)); if (sec<60) return sec+'s'; const m=Math.floor(sec/60); if (m<60) return m+'m'; const h=Math.floor(m/60); if (h<24) return h+'h'; return Math.floor(h/24)+'d'; };
+  // A claimed/implementing item whose last update is older than this reads as a possibly stalled
+  // lane. 15 min matches the console's default active window, so the signal is consistent.
+  const WORK_STALE_MS = 15 * 60000;
+  const isStale = (it) => (it.state==='claimed'||it.state==='implementing') && tms(it.updated_at) && (Date.now()-tms(it.updated_at) > WORK_STALE_MS);
+  // glyph + label + colour-class per work state (mirrors the message .type badges).
+  const WSTATE = {
+    queued:       { g:'◦', c:'queued',       cls:'s-queued' },
+    claimed:      { g:'◑', c:'claimed',      cls:'s-claimed' },
+    implementing: { g:'⚙', c:'implementing', cls:'s-impl' },
+    'in-review':  { g:'◎', c:'in-review',    cls:'s-review' },
+    merged:       { g:'✓', c:'merged',       cls:'s-merged' },
+    deployed:     { g:'⬆', c:'deployed',     cls:'s-deployed' },
+    blocked:      { g:'⛔', c:'blocked',      cls:'s-blocked' },
+    abandoned:    { g:'✕', c:'abandoned',    cls:'s-abandoned' },
+  };
+
+  function workRowHtml(it, depth) {
+    const st = WSTATE[it.state] || { g:'•', c:(it.state||'?'), cls:'' };
+    const blocked = it.state === 'blocked';
+    const stale = isStale(it);
+    const owner = isFilledStr(it.owner) ? '@'+esc(it.owner) : '<span class="wb-unowned">unowned</span>';
+    const isEpic = it.kind === 'epic';
+    return `<div class="wb-item ${blocked?'blk':''} ${stale?'stl':''} ${isEpic?'epic':''} ${it.state==='abandoned'?'abn':''}" data-wid="${it.id}" style="--d:${depth}">` +
+      `<div class="wb-row">` +
+        `<span class="wb-id">#${it.id}</span>` +
+        `<span class="wb-badge ${st.cls}" title="state: ${esc(it.state||'?')}">${st.g} ${esc(st.c)}</span>` +
+        (isFilledStr(it.kind) ? `<span class="wb-kind">${esc(it.kind)}</span>` : '') +
+        `<span class="wb-title">${esc(it.title)}</span>` +
+        `<span class="wb-ago" data-ts="${esc(it.updated_at||'')}" title="updated ${esc(it.updated_at||'?')} UTC">${it.updated_at ? ('updated '+agoShort(it.updated_at)+' ago') : ''}</span>` +
+      `</div>` +
+      `<div class="wb-sub">` +
+        `<span class="wb-owner">${owner}</span>` +
+        (isFilledStr(it.domain) ? `<span class="wb-tag wb-domain">${esc(it.domain)}</span>` : '') +
+        (isFilledStr(it.external_ref) ? `<span class="wb-tag wb-ref">${esc(it.external_ref)}</span>` : '') +
+        (stale ? `<span class="wb-chip stl" title="In ${esc(it.state)} with no update for over ${Math.round(WORK_STALE_MS/60000)} min (claimed_at ${esc(it.claimed_at||'—')}). Possible stalled lane.">stalled</span>` : '') +
+        (blocked ? `<span class="wb-chip blk">blocked</span>` : '') +
+      `</div>` +
+    `</div>`;
+  }
+
+  function renderWorkSummary(items) {
+    const c = {}; for (const it of items) c[it.state] = (c[it.state]||0) + 1;
+    let stalled = 0; for (const it of items) if (isStale(it)) stalled++;
+    const parts = [items.length + ' item' + (items.length===1?'':'s')];
+    const add = (n, label) => { if (c[n]) parts.push(c[n] + ' ' + label); };
+    add('implementing','implementing'); add('in-review','in-review'); add('blocked','blocked'); add('queued','queued');
+    if (stalled) parts.push(stalled + ' stalled');
+    $('wbsummary').textContent = parts.join(' · ');
+  }
+
+  // Rebuild the board from the reconciled map. Grouped by epic: an item with no parent (or whose
+  // parent isn't in the set — an orphan) is a root; children render indented under their parent.
+  // Stable id order avoids row jumping; scrollTop is preserved so a rebuild doesn't flicker/jump.
+  function renderBoard() {
+    const el = $('wboard');
+    const items = [...workItems.values()];
+    if (!items.length) { el.innerHTML = '<div class="empty">no work items yet</div>'; $('wbsummary').textContent = ''; return; }
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const kids = new Map(); const roots = [];
+    for (const it of items) {
+      if (it.parent_id != null && byId.has(it.parent_id)) {
+        if (!kids.has(it.parent_id)) kids.set(it.parent_id, []);
+        kids.get(it.parent_id).push(it);
+      } else {
+        roots.push(it); // top-level, or an orphan whose parent isn't loaded — never hidden
+      }
+    }
+    const byIdAsc = (a, b) => a.id - b.id;
+    roots.sort(byIdAsc); for (const arr of kids.values()) arr.sort(byIdAsc);
+    const rows = []; const seen = new Set();
+    const walk = (it, depth) => {
+      if (seen.has(it.id) || depth > 8) return; seen.add(it.id);
+      rows.push(workRowHtml(it, depth));
+      const cs = kids.get(it.id); if (cs) for (const c of cs) walk(c, depth + 1);
+    };
+    for (const r of roots) walk(r, 0);
+    const prev = el.scrollTop;
+    el.innerHTML = rows.join('');
+    el.scrollTop = prev;
+    renderWorkSummary(items);
+  }
+
+  // Cheap per-poll tick of the relative "updated Ns ago" labels without a full rebuild.
+  function refreshWorkAgos() {
+    for (const el of $('wboard').querySelectorAll('.wb-ago')) {
+      const ts = el.dataset.ts; if (ts) el.textContent = 'updated ' + agoShort(ts) + ' ago';
+    }
+  }
+
+  // Poll the work board. Uses ?updated_after=<cursor> for a cheap incremental fetch; every 20th
+  // poll (and the first) does a full reconcile to self-heal any same-second boundary miss. Fails
+  // quietly like the rest of the console — a work error never flips the message connection.
+  async function pollWork() {
+    if (!$('showBoard').checked) return; // board hidden → skip the network call entirely
+    workPollN++;
+    const full = !workCursor || (workPollN % 20 === 0);
+    try {
+      const { items } = await api('/api/work' + (full ? '' : ('?updated_after=' + encodeURIComponent(workCursor))));
+      if (full) workItems = new Map();
+      let changed = false;
+      for (const it of (items || [])) {
+        const prev = workItems.get(it.id);
+        if (!prev || prev.updated_at !== it.updated_at) changed = true;
+        workItems.set(it.id, it);
+        if (!workCursor || (it.updated_at || '') > workCursor) workCursor = it.updated_at;
+      }
+      if (full || changed) renderBoard(); else refreshWorkAgos();
+      $('wbmeta').textContent = workItems.size ? ('live · ' + workItems.size) : 'no items';
+    } catch (e) {
+      $('wbmeta').textContent = 'paused'; // leave the last-rendered board in place
+    }
+  }
+
   async function poll() {
     if (!base()) { setOK(false, 'set bus URL'); return; }
     try {
@@ -327,6 +492,7 @@
       firstChannels = false;
       pollFails = 0;
       setOK(true, `live · ${channels.length} ch${leaderRev ? ' · rev ' + leaderRev : ''}`);
+      pollWork(); // read-only work board — self-contained, quiet on error
     } catch (e) {
       pollFails++;
       // A run of failures usually means the leader migrated (the node that served us stepped
@@ -349,6 +515,7 @@
   }
   async function start() {
     save(); seenIds = new Set(); cursors = {}; msgLog = []; firstChannels = true; stream.innerHTML = ''; pollFails = 0;
+    workItems = new Map(); workCursor = null; workPollN = 0; $('wboard').innerHTML = '<div class="empty">—</div>'; $('wbsummary').textContent = ''; $('wbmeta').textContent = '';
     if (timer) clearInterval(timer);
     if (hbTimer) clearInterval(hbTimer);
     // Point at the authoritative leader before connecting. The served origin is usually it, but a
@@ -423,6 +590,11 @@
     $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); start(); } });
   });
   ['chanWin','partWin','showAllParts','showAllChans'].forEach((id) => $(id).addEventListener('change', () => { save(); poll(); }));
+  $('showBoard').addEventListener('change', () => {
+    document.body.classList.toggle('board-on', $('showBoard').checked);
+    save();
+    if ($('showBoard').checked && ok) pollWork(); // populate immediately on show
+  });
   $('peers').addEventListener('change', save);
   // auto-connect only when a token is already stored (avoids a 401 flash on a first-ever open)
   if (base() && $('token').value.trim()) start(); else setOK(false, 'set token');
