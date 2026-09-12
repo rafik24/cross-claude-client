@@ -30,11 +30,21 @@ export const CONFIG_NAMES = { old: OLD_CONFIG, new: NEW_CONFIG };
 // Pure, testable directory migration: prefer `newDir`; else migrate `oldDir`→`newDir` once (atomic
 // rename); if the rename can't happen (in-use/raced) keep `oldDir`; if neither exists, create
 // `newDir`. Never creates an empty `newDir` alongside a populated `oldDir`.
-export function migrateDir(oldDir, newDir) {
+export function migrateDir(oldDir, newDir, renameImpl = renameSync) {
   if (existsSync(newDir)) return newDir;
   if (existsSync(oldDir)) {
-    try { renameSync(oldDir, newDir); return newDir; }
-    catch { return oldDir; }   // in-use / raced → keep the old (never blank the bus)
+    try { renameImpl(oldDir, newDir); return newDir; }
+    catch {
+      // Rename failed for one of two reasons — and they need OPPOSITE handling:
+      //  (a) a CONCURRENT migrator won the race (moved old→new) between our existsSync(newDir)
+      //      check above and this rename. old is now gone, new holds the data → use NEW. If we
+      //      instead fell through and returned old, the caller's mkdirSync would recreate old
+      //      EMPTY and open messages.db there — splitting/blanking the bus (the bug this guards).
+      //  (b) genuinely in-use (Windows EPERM/EBUSY on an open DB): new was never created, old is
+      //      still present + populated → keep OLD; self-heals next start once the DB is free.
+      if (existsSync(newDir)) return newDir;
+      return oldDir;
+    }
   }
   try { mkdirSync(newDir, { recursive: true }); } catch {}
   return newDir;

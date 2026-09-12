@@ -55,6 +55,32 @@ try {
     rmSync(base, { recursive: true, force: true });
   }
 
+  // 3b. rename FAILS but a concurrent migrator already created new (the race the MED-1 fix guards):
+  //     must return NEW (never fall through to recreate an empty old → split/blank the bus).
+  {
+    const base = scratch();
+    const oldDir = join(base, 'old'); const newDir = join(base, 'new');
+    mkdirSync(oldDir, { recursive: true }); writeFileSync(join(oldDir, 'x'), '1');
+    const throwRename = () => { mkdirSync(newDir, { recursive: true }); writeFileSync(join(newDir, 'messages.db'), 'WON'); throw new Error('EPERM (raced)'); };
+    const got = migrateDir(oldDir, newDir, throwRename);
+    ok(got === newDir, 'race: rename throws + new exists → returns NEW (not old)');
+    ok(readFileSync(join(newDir, 'messages.db'), 'utf8') === 'WON', 'race: the concurrent winner\'s data is used');
+    rmSync(base, { recursive: true, force: true });
+  }
+
+  // 3c. rename FAILS and new was NOT created (genuine in-use: DB open) → keep OLD, don't blank.
+  {
+    const base = scratch();
+    const oldDir = join(base, 'old'); const newDir = join(base, 'new');
+    mkdirSync(oldDir, { recursive: true }); writeFileSync(join(oldDir, 'messages.db'), 'LIVE');
+    const throwRename = () => { throw new Error('EBUSY (in use)'); };
+    const got = migrateDir(oldDir, newDir, throwRename);
+    ok(got === oldDir, 'in-use: rename throws + new absent → keeps OLD');
+    ok(!existsSync(newDir), 'in-use: no empty new dir created');
+    ok(readFileSync(join(oldDir, 'messages.db'), 'utf8') === 'LIVE', 'in-use: old data intact');
+    rmSync(base, { recursive: true, force: true });
+  }
+
   // 4. env overrides win (tests + isolated nodes must never touch the real paths).
   {
     const d = scratch(); const c = join(scratch(), 'cfg');

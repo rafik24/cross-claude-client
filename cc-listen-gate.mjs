@@ -53,7 +53,7 @@ try {
     const cwd = payload.cwd || process.cwd();
     const machine = (hostname().toLowerCase().replace(/[^a-z0-9._-]/g, '-').replace(/-+$/, '')) || 'unknown';
     let topic = '';
-    try { topic = execSync('git rev-parse --abbrev-ref HEAD', { cwd, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch {}
+    try { topic = execSync('git rev-parse --abbrev-ref HEAD', { cwd, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).toString().trim(); } catch {}
     topic = (topic && topic !== 'HEAD') ? topic : basename(cwd);
     topic = topic.replace(/[^A-Za-z0-9._-]/g, '-').replace(/-+$/, '') || 'misc';
     id = `${machine}/${topic}`;
