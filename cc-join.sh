@@ -2,8 +2,8 @@
 # ---------------------------------------------------------------------------
 # cc-join.sh — SessionStart hook: auto-join the live Cross-Claude chat bus.
 #
-# OPT-IN PER MACHINE: this no-ops entirely unless ~/.claude/.cross-claude-bus
-# exists — so it only fires on machines you have deliberately enrolled (the
+# OPT-IN PER MACHINE: this no-ops entirely unless the bus config (~/.claude/.crosstalk,
+# or legacy ~/.claude/.cross-claude-bus) exists — so it only fires on enrolled machines (the
 # local dev box and the Linux build/test box). Advisory, fail-open, exit 0.
 #
 # A SessionStart hook cannot call the Skill or Monitor tools itself, so it does
@@ -21,7 +21,14 @@
 #   agrees with the current name, default or renamed.
 # ---------------------------------------------------------------------------
 set -u
-CFG="${CC_BUS_CONFIG:-$HOME/.claude/.cross-claude-bus}"
+# Config: prefer the new ~/.claude/.crosstalk, fall back to the legacy ~/.claude/.cross-claude-bus
+# (CC_BUS_CONFIG overrides). Keeps already-enrolled nodes working through the rename.
+CFG="${CC_BUS_CONFIG:-}"
+if [ -z "$CFG" ]; then
+  if [ -f "$HOME/.claude/.crosstalk" ]; then CFG="$HOME/.claude/.crosstalk"
+  elif [ -f "$HOME/.claude/.cross-claude-bus" ]; then CFG="$HOME/.claude/.cross-claude-bus"
+  else CFG="$HOME/.claude/.crosstalk"; fi
+fi
 [ -f "$CFG" ] || exit 0
 command -v node >/dev/null 2>&1 || exit 0
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -22,7 +22,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync, statSync } from 'node:fs';
-import { homedir, hostname } from 'node:os';
+import { hostname } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -33,11 +33,12 @@ import {
 import { startBeacon } from './cc-beacon.mjs';
 import { revString } from './cc-rev.mjs';
 import { canonicalShort } from './cc-render.mjs';
+import { dataDir } from './cc-paths.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = join(__dirname, 'server', 'server.mjs');
 const HOST = process.env.CC_HOST || hostname();
-const DATA_DIR = process.env.CC_DATA_DIR || join(homedir(), '.cross-claude-mcp');
+const DATA_DIR = dataDir();   // ~/.crosstalk (migrated from ~/.cross-claude-mcp once); CC_DATA_DIR overrides
 const EPOCH_FILE = join(DATA_DIR, 'epoch');
 const DB_FILE = join(DATA_DIR, 'messages.db');
 

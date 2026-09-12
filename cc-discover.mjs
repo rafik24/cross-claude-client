@@ -20,6 +20,7 @@ import { homedir, networkInterfaces, hostname } from 'node:os';
 import { join } from 'node:path';
 import dgram from 'node:dgram';
 import { execFile } from 'node:child_process';
+import { configPath } from './cc-paths.mjs';
 
 export const DEFAULT_PORT = 8787;
 export const DEFAULT_BEACON_PORT = 8788;
@@ -30,9 +31,9 @@ export const DEFAULT_BEACON_PORT = 8788;
 function cacheDir() { return process.env.CC_CACHE_DIR || join(homedir(), '.claude', '.cc-listen'); }
 function cacheFile() { return join(cacheDir(), 'leader.json'); }
 
-// --- config (shell-style ~/.claude/.cross-claude-bus) ---
+// --- config (shell-style ~/.claude/.crosstalk, back-compat ~/.claude/.cross-claude-bus) ---
 export function loadConfig() {
-  const p = process.env.CC_BUS_CONFIG || join(homedir(), '.claude', '.cross-claude-bus');
+  const p = configPath();
   const out = {};
   try {
     for (const l of readFileSync(p, 'utf8').split(/\r?\n/)) {

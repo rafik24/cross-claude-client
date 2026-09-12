@@ -10,7 +10,7 @@
     "bus": "node cc-bus.mjs start",
     "status": "node cc-bus.mjs status",
     "server": "node server/server.mjs",
-    "test": "node test/render.test.mjs && node test/db.test.mjs && node test/rest.test.mjs && node test/server.test.mjs && node test/ws.test.mjs && node test/discovery.test.mjs && node test/supervisor.test.mjs"
+    "test": "node test/paths.test.mjs && node test/render.test.mjs && node test/db.test.mjs && node test/rest.test.mjs && node test/server.test.mjs && node test/ws.test.mjs && node test/discovery.test.mjs && node test/supervisor.test.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.2.0",

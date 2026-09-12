@@ -15,6 +15,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { join, basename } from 'node:path';
 import { execSync } from 'node:child_process';
+import { configPath } from './cc-paths.mjs';
 
 const FRESH_MS = 45000;                       // cc-poll heartbeats every 20s → 45s window
 function done(code, msg) { if (msg) process.stderr.write(msg + '\n'); process.exit(code); }
@@ -24,7 +25,7 @@ try {
   try { payload = JSON.parse(readFileSync(0, 'utf8') || '{}'); } catch {}
 
   // enrollment: only enrolled machines (bus config present) are gated
-  const cfgPath = process.env.CC_BUS_CONFIG || join(homedir(), '.claude', '.cross-claude-bus');
+  const cfgPath = configPath();   // ~/.claude/.crosstalk, back-compat ~/.claude/.cross-claude-bus
   const cfg = {};
   try { for (const l of readFileSync(cfgPath, 'utf8').split(/\r?\n/)) { const m = l.match(/^\s*(?:export\s+)?(CC_[A-Z_]+)\s*=\s*(.*?)\s*$/); if (m) cfg[m[1]] = m[2].replace(/^["']|["']$/g, ''); } } catch {}
   if (!cfg.CC_BASE) done(0);

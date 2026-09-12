@@ -1,7 +1,7 @@
 // db.mjs — Crosstalk storage layer. SQLite-only.
 //
 // One db object backed by SQLite via better-sqlite3, file at
-// ${CC_DATA_DIR||~/.cross-claude-mcp}/messages.db.
+// ${CC_DATA_DIR||~/.crosstalk}/messages.db (migrated once from the old ~/.cross-claude-mcp).
 //
 // The backend is hidden behind a small "adapter" whose query methods are ALWAYS async.
 // The underlying better-sqlite3 calls are synchronous, so we just wrap their results in
@@ -13,9 +13,9 @@
 // SQL fragments (SQL keywords, column names, and fixed retention amounts).
 
 import Database from 'better-sqlite3';
-import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { dataDir as resolveDataDir } from '../cc-paths.mjs';
 
 // ── Public constants ────────────────────────────────────────────────────────
 
@@ -183,7 +183,7 @@ function schemaStatements() {
  * awaitable regardless of backend.
  */
 export async function createDB() {
-  const dataDir = process.env.CC_DATA_DIR || path.join(os.homedir(), '.cross-claude-mcp');
+  const dataDir = resolveDataDir();   // ~/.crosstalk (CC_DATA_DIR overrides); migrates old dir once
   fs.mkdirSync(dataDir, { recursive: true });
   const handle = new Database(path.join(dataDir, 'messages.db'));
   handle.pragma('journal_mode = WAL');
