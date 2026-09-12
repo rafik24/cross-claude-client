@@ -69,7 +69,7 @@ try {
   done(2, [
     `⛔ CHAT BUS — this session (${id}) is NOT listening; blocked before editing ${file || 'an estate file'}.`,
     `On an enrolled machine every session must be on the live bus before it edits code. Arm receive, then retry:`,
-    `  Monitor({ command: 'node ${recvHint} ${id}', description: 'cross-claude bus (${id})', persistent: true })`,
+    `  Monitor({ command: 'node ${recvHint} ${id}', description: 'crosstalk bus (${id})', persistent: true })`,
     `(The SessionStart join hook prints this exact line. One-off bypass: set CC_LISTEN_BYPASS=1.)`,
   ].join('\n'));
 } catch {

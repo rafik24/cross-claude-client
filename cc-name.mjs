@@ -71,5 +71,5 @@ console.log(`named on the bus as: ${id}`);
 console.log(`ARM (or RE-ARM) live-receive with THIS id — stop any prior Monitor first:`);
 // cc-ws is the real-time PUSH receiver (WebSocket + cursor backfill, issue #3). It auto-falls
 // back to the old 2s poll if the leader is too old to speak WS, so it is always safe to arm.
-console.log(`  Monitor({ command: 'node ${ws} ${id}', description: 'cross-claude bus (${id})', persistent: true })`);
+console.log(`  Monitor({ command: 'node ${ws} ${id}', description: 'crosstalk bus (${id})', persistent: true })`);
 console.log(`From now, send as:  node ${send} ${id} <channel|all> 'message'`);

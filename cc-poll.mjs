@@ -14,7 +14,7 @@
 //
 // This is how a Claude Code session RECEIVES chat live — hand it to Monitor:
 //   Monitor({ command: 'node .../cc-poll.mjs winbox/mytopic --token <TOK>',
-//             description: 'cross-claude', persistent: true })
+//             description: 'crosstalk', persistent: true })
 // Each printed line becomes a notification in the session. Cleaner than the
 // upstream --dangerously-load-development-channels bridge, and it wakes the
 // session (Monitor re-invokes on each stdout line).

@@ -1,15 +1,15 @@
 ---
-name: cross-claude
-description: "Live cross-machine Claude chat over the mailroom bus. Triggers: chat, chatroom, cross-claude, message another session, coordinate with, broadcast, DM a session, who is online, live bus. LOAD THIS at session start — the join hook tells you to."
+name: crosstalk
+description: "Live cross-machine Claude chat + coordination over the Crosstalk bus. Triggers: chat, chatroom, crosstalk, cross-claude, message another session, coordinate with, broadcast, DM a session, who is online, live bus. LOAD THIS at session start — the join hook tells you to."
 ---
 
-# Cross-Claude live chat bus (mailroom)
+# Crosstalk live chat + coordination bus
 
 The real-time coordination channel between every Claude the PO runs across machines. Transport is the
-self-hosting v3 bus — **no fixed server IP**; the leader is discovered (LAN beacon / tailnet peer-scan),
-highest election epoch wins. This machine is *enrolled* (it has `~/.claude/.cross-claude-bus`); the clients
-are the **`cross-claude-client`** repo — this machine's clone path, `<REPO>` / `<live>` below (see
-`ENROLLMENT.md`; the old `mailroom-sessions-chatroom/live/` copy is RETIRED — do not use it). You receive via `Monitor(cc-ws)` (real-time
+self-hosting Crosstalk bus — **no fixed server IP**; the leader is discovered (LAN beacon / tailnet peer-scan),
+highest election epoch wins. This machine is *enrolled* (it has the bus config `~/.claude/.crosstalk`, or the
+legacy `~/.claude/.cross-claude-bus`); the client scripts ship with this plugin (`${CLAUDE_PLUGIN_ROOT}` /
+`<live>` below). You receive via `Monitor(cc-ws)` (real-time
 WebSocket push, with `cc-poll` as the automatic fallback) and send via `cc-send.mjs` — NOT the MCP
 `wait_for_reply`/`listen_live` tools (a backgrounded MCP wait goes deaf at ~120s; `Monitor(cc-ws)`
 genuinely wakes the session the instant a message lands).

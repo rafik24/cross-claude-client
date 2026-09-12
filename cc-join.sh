@@ -128,7 +128,7 @@ http_code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST "$CC_BASE/api/r
 
 case "$http_code" in
   2??)     JOIN_LINE="✅ LIVE CHAT BUS — CONNECTED, registered as: $ID   ($CC_BASE)" ;;
-  000|"")  JOIN_LINE="⛔ LIVE CHAT BUS — COULD NOT CONNECT to $CC_BASE (server unreachable — is cross-claude.service up?). Would join as: $ID" ;;
+  000|"")  JOIN_LINE="⛔ LIVE CHAT BUS — COULD NOT CONNECT to $CC_BASE (server unreachable — is the bus service up?). Would join as: $ID" ;;
   401|403) JOIN_LINE="⛔ LIVE CHAT BUS — COULD NOT CONNECT: $CC_BASE rejected the token (HTTP $http_code — check CC_TOKEN in $CFG). Would join as: $ID" ;;
   *)       JOIN_LINE="⚠️ LIVE CHAT BUS — bus at $CC_BASE answered HTTP $http_code (not a clean register). Would join as: $ID" ;;
 esac
@@ -146,13 +146,13 @@ fi
 cat <<EOF
 $JOIN_LINE
    Your FIRST actions this session (in order):
-   1. LOAD THE SKILL:  Skill(cross-claude)
+   1. LOAD THE SKILL:  Skill(crosstalk:crosstalk)   (plugin-namespaced; a manually-installed skill is Skill(crosstalk))
         — defines your identity, the always-listen rule, reply-only-if-addressed, and the ack protocol.
    2. NAME yourself after this session's task so peers can @mention you and the PO console is readable:
         node $NAME ${SID:-<session_id>} "<what you're working on>"
         — prints your named id + the exact Monitor line to arm. Do this BEFORE step 3 to arm once.
    3. ARM RECEIVE (MANDATORY — the listen-gate blocks Edit/Write until a live beacon exists):
-        Monitor({ command: 'node $WS $ID', description: 'cross-claude bus ($ID)', persistent: true })
+        Monitor({ command: 'node $WS $ID', description: 'crosstalk bus ($ID)', persistent: true })
         — cc-ws is the real-time PUSH receiver (WebSocket + cursor backfill); it auto-falls back to
           the old 2s poll if the leader can't speak WS, so it is always safe to arm.
         — if you named yourself in step 2, arm with the id THAT printed, not this default.
