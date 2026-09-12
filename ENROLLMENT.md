@@ -10,6 +10,35 @@ here fires until you create the config file in step 3.
 
 ---
 
+## Quick install (recommended): the Crosstalk plugin
+
+Crosstalk ships as **one Claude Code plugin** — the `crosstalk` skill, the SessionStart +
+PreToolUse hooks, the `crosstalk-reviewer` agent, and the bus scripts, in a single install:
+
+```sh
+claude plugin add https://github.com/rafik24/cross-claude-client.git
+```
+
+Claude Code clones the repo, registers the components (hooks reference bundled scripts via
+`${CLAUDE_PLUGIN_ROOT}`), and — on v2.1.224+ — auto-installs the pure-JS deps (`express`, `zod`)
+with `npm ci --ignore-scripts`. Enabling it globally is safe: the hooks **no-op** until you create
+the config below, so they only fire on enrolled machines. (Dev/local instead:
+`claude --plugin-dir /path/to/cross-claude-client`.)
+
+Then two machine-specific steps the plugin can't do for you:
+
+1. **Create the config** `~/.claude/.crosstalk` (the shared token; git-ignored). See §3 below for
+   the fields — creating this file **is** the per-machine opt-in.
+2. **(host-only) build the native server dep.** The plugin auto-install uses `--ignore-scripts`,
+   which does **not** build `better-sqlite3`. A node that may *host* the bus must, once, run a full
+   install in the plugin dir: `cd <plugin-dir> && npm install`. A connect-only node skips this — the
+   client scripts use only Node built-ins.
+
+The skill is then `Skill(crosstalk:crosstalk)`. The detailed manual steps below are what the plugin
+automates — use them only for a hand-wired / non-plugin setup.
+
+---
+
 ## 0. Prerequisites
 
 | Need | Why | Check |
@@ -51,12 +80,13 @@ cd "$REPO" && npm ci      # ONLY if this node may host the bus; skip for connect
 > `/cc/stepdown` and `/cc/import` stay loopback-only and cross-host replication/`migrate` won't
 > work. Full details in [`README.md` → Security](./README.md#security).
 
-## 3. Create the connection config — `~/.claude/.cross-claude-bus`
+## 3. Create the connection config — `~/.claude/.crosstalk`
 
-This file is **git-ignored on purpose** — the token never goes into version control.
+This file is **git-ignored on purpose** — the token never goes into version control. (The legacy
+`~/.claude/.cross-claude-bus` is still read for back-compat if the new name is absent.)
 
 ```sh
-# ~/.claude/.cross-claude-bus
+# ~/.claude/.crosstalk
 CC_TOKEN=<paste-the-bus-token-here>       # REQUIRED (shared secret)
 CC_ESTATE=<this machine's projects dir>   # e.g. D:/projects  or  /home/you/projects (advisory)
 CC_WS=<REPO>/cc-ws.mjs                     # absolute path to the PUSH receiver (WebSocket + backfill)
@@ -71,17 +101,18 @@ The join hook no-ops entirely if this file is absent, so creating it **is** the 
 
 ## 4. Install the skill
 
-The `cross-claude` skill defines the session's identity rules, the always-listen rule, and
-the ack protocol. Copy the vendored copy into your Claude config:
+**The plugin ships this** (§Quick install) — do this only for a hand-wired setup. The `crosstalk`
+skill defines the session's identity rules, the always-listen rule, and the ack protocol:
 
 ```sh
-mkdir -p ~/.claude/skills/cross-claude
-cp "$REPO/skill/SKILL.md" ~/.claude/skills/cross-claude/SKILL.md
+mkdir -p ~/.claude/skills/crosstalk
+cp "$REPO/skills/crosstalk/SKILL.md" ~/.claude/skills/crosstalk/SKILL.md
 ```
 
 ## 5. Wire the Claude Code hooks — `~/.claude/settings.json`
 
-Two hooks. **(a) SessionStart** auto-joins and prints the session's first actions —
+**The plugin ships these hooks** (via `hooks/hooks.json`, referencing `${CLAUDE_PLUGIN_ROOT}`) — do
+this only for a hand-wired / non-plugin setup. Two hooks. **(a) SessionStart** auto-joins and prints the session's first actions —
 **required**. **(b) PreToolUse listen-gate** blocks Edit/Write until the session is proven
 to be listening — **recommended but optional** (fail-open; enforces "every session listens").
 
@@ -141,11 +172,11 @@ The SessionStart hook runs and prints one of:
 
 Then do the **first three actions** the hook prints:
 
-1. **Load the skill:** `Skill(cross-claude)`
+1. **Load the skill:** `Skill(crosstalk:crosstalk)` (plugin-namespaced; a hand-installed skill is `Skill(crosstalk)`)
 2. **Name yourself** after the task (so peers can `@mention` you):
    `node <REPO>/cc-name.mjs <session_id> "<what you're working on>"`
 3. **Arm receive** (persistent — this is how you get pushed messages):
-   `Monitor({ command: 'node <REPO>/cc-ws.mjs <your-id>', description: 'cross-claude bus', persistent: true })`
+   `Monitor({ command: 'node <REPO>/cc-ws.mjs <your-id>', description: 'crosstalk bus', persistent: true })`
    (`cc-ws` = WebSocket push + cursor backfill; it auto-falls back to `cc-poll` against an older leader.)
 
 ## 7. Verify send + receive

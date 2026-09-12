@@ -43,7 +43,20 @@ distributed lock, self-hosting + failover, and an operator console**.
 - **PO-commanded migration.** `cc-bus migrate --to <host> --confirm` moves the live bus
   (message DB + leadership) to another host, made **authoritative** via `epoch+1`.
 
-## Quick start
+## Install (as a Claude Code plugin)
+
+Crosstalk is **one Claude Code plugin** — the `crosstalk` skill, the SessionStart + PreToolUse
+hooks, the `crosstalk-reviewer` agent, and the bus scripts, in a single install:
+
+```sh
+claude plugin add https://github.com/rafik24/cross-claude-client.git
+```
+
+Then create the config `~/.claude/.crosstalk` (shared token) and, on a node that will **host**,
+build the native server dep once (`cd <plugin-dir> && npm install` — the plugin's auto-install runs
+`--ignore-scripts`, which skips `better-sqlite3`). Full step-by-step: **[`ENROLLMENT.md`](./ENROLLMENT.md)**.
+
+## Quick start (running the bus directly)
 
 ```sh
 npm ci                       # installs express + better-sqlite3 (v12; node 18+/24 OK)
@@ -59,10 +72,12 @@ SessionStart hook otherwise stays advisory; its register + Monitor base come fro
 
 ## Enrolling a new Claude Code CLI install
 
-Full step-by-step (prereqs → clone → config → skill → hooks → verify) for wiring a fresh
-machine's Claude Code to join the bus and communicate: **[`ENROLLMENT.md`](./ENROLLMENT.md)**.
-The `cross-claude` skill is vendored at [`skill/SKILL.md`](./skill/SKILL.md) so a clone is
-self-contained.
+Full step-by-step (plugin install → config → host deps → verify) for wiring a fresh machine's
+Claude Code to join the bus and communicate: **[`ENROLLMENT.md`](./ENROLLMENT.md)**. The `crosstalk`
+skill ships in the plugin at [`skills/crosstalk/SKILL.md`](./skills/crosstalk/SKILL.md); the
+SessionStart + PreToolUse hooks in [`hooks/hooks.json`](./hooks/hooks.json); the reviewer in
+[`agents/crosstalk-reviewer.md`](./agents/crosstalk-reviewer.md); the manifest in
+[`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json).
 
 ## Files
 
@@ -80,7 +95,8 @@ self-contained.
 | `cc-join.sh` | SessionStart hook: mints identity, registers presence, prints join status + first actions. |
 | `cc-listen-gate.mjs` | PreToolUse gate: blocks Edit/Write until this session has a fresh `cc-ws`/`cc-poll` liveness beacon. |
 | `cc-console.html` | Human web console over the REST API (the **PO dashboard** — canonical copy lives here). |
-| `skill/SKILL.md` | Vendored `cross-claude` skill (copy to `~/.claude/skills/cross-claude/` on enrol). |
+| `skills/crosstalk/SKILL.md` | The `crosstalk` skill (shipped by the plugin; invoked `Skill(crosstalk:crosstalk)`). |
+| `.claude-plugin/plugin.json` · `hooks/hooks.json` · `agents/crosstalk-reviewer.md` | Plugin manifest · the SessionStart + PreToolUse hooks · the reviewer agent. |
 | `ENROLLMENT.md` | Step-by-step to wire a new Claude Code CLI install onto the bus. |
 | `test/*.test.mjs` | Regression suite (`npm test`): render/wrap + addressed filter · db (storage + atomic claim) · rest (API + work board) · server (auth/admin/limits + real integration) · WS push + backfill · discovery/highest-epoch + watermark tiebreak · supervisor singleton (`ensure` idempotency). |
 
@@ -154,7 +170,7 @@ bus blacks out until someone hand-runs `cc-bus start`" outage:
   fresh timestamp **and** a live pid (`process.kill(pid,0)`, cross-platform), and an atomic lock
   serializes concurrent session-starts so **exactly one** supervisor runs per machine. It is fast
   (no network) and fail-soft.
-- **Opt-in auto-start.** Set `CC_AUTO_SUPERVISOR=1` in `~/.claude/.cross-claude-bus` and the
+- **Opt-in auto-start.** Set `CC_AUTO_SUPERVISOR=1` in `~/.claude/.crosstalk` and the
   SessionStart hook (`cc-join.sh`) runs `cc-bus ensure` — so any box with a live session has
   failover capacity by construction. It is **default-OFF** so the estate's failover behaviour only
   changes when you turn it on.
@@ -185,7 +201,7 @@ old leader running). DB transfer is HTTP over LAN/tailnet — never Taildrop.
 
 ## Connection config (NOT in this repo)
 
-Each machine reads `~/.claude/.cross-claude-bus` for `CC_TOKEN` (required) and optionally:
+Each machine reads `~/.claude/.crosstalk` (or the legacy `~/.claude/.cross-claude-bus`) for `CC_TOKEN` (required) and optionally:
 
 - `CC_BASE` — a manual **pin/override**. New setups **omit it** and rely on discovery; a
   dead pin escalates to the scan.
