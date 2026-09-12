@@ -158,7 +158,7 @@ function directedBroadcast(addr, mask) {
 // --- Tailnet: enumerate online peers via `tailscale status --json` ---
 function tailscalePeers() {
   return new Promise((resolve) => {
-    execFile('tailscale', ['status', '--json'], { timeout: 2500 }, (err, stdout) => {
+    execFile('tailscale', ['status', '--json'], { timeout: 2500, windowsHide: true }, (err, stdout) => {
       if (err) return resolve([]);
       try {
         const j = JSON.parse(stdout);

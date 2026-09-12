@@ -23,9 +23,9 @@ let cached = null;
 export function codeRev() {
   if (cached) return cached;
   try {
-    const rev = execFileSync('git', ['-C', REPO, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', timeout: 2500 }).trim();
+    const rev = execFileSync('git', ['-C', REPO, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', timeout: 2500, windowsHide: true }).trim();
     let dirty = false;
-    try { dirty = execFileSync('git', ['-C', REPO, 'status', '--porcelain'], { encoding: 'utf8', timeout: 2500 }).trim().length > 0; } catch {}
+    try { dirty = execFileSync('git', ['-C', REPO, 'status', '--porcelain'], { encoding: 'utf8', timeout: 2500, windowsHide: true }).trim().length > 0; } catch {}
     cached = { rev: rev || null, dirty };
   } catch { cached = { rev: null, dirty: false }; }
   return cached;

@@ -141,6 +141,10 @@ function spawnLeader(epoch, port, token) {
       CC_DATA_DIR: DATA_DIR,
     },
     stdio: 'inherit',
+    // Never pop a console window on Windows when a console-less/detached supervisor spawns the
+    // server child (each such spawn would otherwise flash a window; a crash-loop flashes many).
+    // No-op on POSIX.
+    windowsHide: true,
   });
   return child;
 }
@@ -384,7 +388,7 @@ function cmdEnsure() {
     // taking the lock.
     if (supervisorLive()) { log('supervisor came up concurrently — nothing to do'); return; }
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'start'], {
-      detached: true, stdio: 'ignore',
+      detached: true, stdio: 'ignore', windowsHide: true,   // no flashing console window on Windows
     });
     child.unref();
     // Record the child pid immediately so a follow-on ensure sees the slot as claimed before the
@@ -543,7 +547,7 @@ async function cmdReceive(args) {
               // migrate-born leader the same resilience as a `start`-elected one.
               log(`server exited (code ${code}) — re-joining the bus via 'cc-bus start'`);
               try {
-                spawn(process.execPath, [fileURLToPath(import.meta.url), 'start'], { detached: true, stdio: 'ignore' }).unref();
+                spawn(process.execPath, [fileURLToPath(import.meta.url), 'start'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
               } catch {}
               process.exit(code || 0);
             });
@@ -658,7 +662,7 @@ async function resolveTarget(to, port) {
 
 function tailscaleIpForHost(host) {
   return new Promise((resolve) => {
-    execFile('tailscale', ['status', '--json'], { timeout: 2500 }, (err, stdout) => {
+    execFile('tailscale', ['status', '--json'], { timeout: 2500, windowsHide: true }, (err, stdout) => {
       if (err) return resolve(null);
       try {
         const j = JSON.parse(stdout);
