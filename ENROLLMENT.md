@@ -16,7 +16,7 @@ Crosstalk ships as **one Claude Code plugin** — the `crosstalk` skill, the Ses
 PreToolUse hooks, the `crosstalk-reviewer` agent, and the bus scripts, in a single install:
 
 ```sh
-claude plugin marketplace add https://github.com/rafik24/cross-claude-client.git   # registers the marketplace (.claude-plugin/marketplace.json)
+claude plugin marketplace add https://github.com/rafik24/crosstalk.git   # registers the marketplace (.claude-plugin/marketplace.json)
 claude plugin install crosstalk@crosstalk                                           # installs the crosstalk plugin
 ```
 
@@ -27,7 +27,7 @@ the config below, so they only fire on enrolled machines. (Dev/local instead:
 `claude --plugin-dir /path/to/cross-claude-client`.)
 
 > **Private repo:** the plugin lives in a private GitHub repo, so the install machine needs git
-> credentials for `rafik24/cross-claude-client` (or the repo must be published). A creds-less fleet
+> credentials for `rafik24/crosstalk` (or the repo must be published). A creds-less fleet
 > box will fail at the clone — provision creds, copy the tree over, or publish.
 
 Then two machine-specific steps the plugin can't do for you:
@@ -65,7 +65,7 @@ use only Node built-ins.
 # pick a stable path; examples:
 #   Windows:  D:/projects/cross-claude-client
 #   Linux:    ~/cross-claude-client
-git clone https://github.com/rafik24/cross-claude-client
+git clone https://github.com/rafik24/crosstalk
 ```
 
 Let `REPO` be that absolute path below. On Windows use **forward slashes** in every hook

@@ -49,7 +49,7 @@ Crosstalk is **one Claude Code plugin** — the `crosstalk` skill, the SessionSt
 hooks, the `crosstalk-reviewer` agent, and the bus scripts, in a single install:
 
 ```sh
-claude plugin marketplace add https://github.com/rafik24/cross-claude-client.git
+claude plugin marketplace add https://github.com/rafik24/crosstalk.git
 claude plugin install crosstalk@crosstalk
 ```
 
