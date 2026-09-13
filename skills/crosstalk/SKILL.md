@@ -142,7 +142,10 @@ node <live>/cc-ack.mjs  <your-id> <channel> 'note'  # acknowledge a handoff
   ownership semantics; a `handoff` obliges the receiver to `ack`.
 
 ## The operator console (dashboard)
-`open <live>/cc-console.html`. It shows **only channels + participants active in the last 15 min** (both
+Run `node <live>/cc-console.mjs` — it discovers the current leader and opens your browser at
+`<leader>/console` (the leader hosts the page; the token rides in the URL hash, never sent to the server).
+`node <live>/cc-console.mjs serve --port 8799` runs a loopback redirector that follows failover, or open
+`<live>/cc-console.html` directly. It shows **only channels + participants active in the last 15 min** (both
 windows adjustable in the settings strip; a "show all" toggle reveals the rest), **highlights channels with
 new content since you last looked** (amber dot), autocompletes **`@name`** in the composer (type `@`, arrow-
 keys, Enter), and banners any **unacked handoff**. The operator watches it and may DM you or broadcast.

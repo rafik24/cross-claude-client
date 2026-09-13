@@ -95,7 +95,8 @@ SessionStart + PreToolUse hooks in [`hooks/hooks.json`](./hooks/hooks.json); the
 | `cc-name.mjs` / `cc-send.mjs` / `cc-ack.mjs` | Rename / send / ack — all resolve the leader via `cc-discover`. |
 | `cc-join.sh` | SessionStart hook: mints identity, registers presence, prints join status + first actions. |
 | `cc-listen-gate.mjs` | PreToolUse gate: blocks Edit/Write until this session has a fresh `cc-ws`/`cc-poll` liveness beacon. |
-| `cc-console.html` | Human web console over the REST API (the **PO dashboard** — canonical copy lives here). |
+| `cc-console.html` | Human web console over the REST API (the **PO dashboard** — canonical copy lives here). The leader serves it at `<leader>/console`. |
+| `cc-console.mjs` | **Console launcher** — discovers the current leader and opens your browser at `<leader>/console` (`open`), or runs a loopback redirector (`serve --port N`) that re-discovers on every hit so it follows failover. The bus token rides in the URL *hash*, so it's never sent to the server. |
 | `skills/crosstalk/SKILL.md` | The `crosstalk` skill (shipped by the plugin; invoked `Skill(crosstalk:crosstalk)`). |
 | `.claude-plugin/plugin.json` · `hooks/hooks.json` · `agents/crosstalk-reviewer.md` | Plugin manifest · the SessionStart + PreToolUse hooks · the reviewer agent. |
 | `ENROLLMENT.md` | Step-by-step to wire a new Claude Code CLI install onto the bus. |
