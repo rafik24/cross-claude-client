@@ -409,7 +409,10 @@ export function createRestRouter(db) {
       if (newOwner) {
         try {
           const from = isFilledString(by) ? by : 'cc-work';
-          const title = String(item?.title ?? '').slice(0, 120);
+          // Strip '@' from the interpolated title so a title like "@all cleanup" can't
+          // widen who the notification is addressed to (cc-render keys addressing off any
+          // @mention / @all in the body). The intended `@${newOwner}` below is unaffected.
+          const title = String(item?.title ?? '').replace(/@/g, '').slice(0, 120);
           await db.createChannel('general', null);
           await db.sendMessage(
             'general',
