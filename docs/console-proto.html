@@ -237,6 +237,7 @@
 </head>
 <body>
 
+<!-- Icons: paths derived from Feather Icons (https://feathericons.com), MIT License, Copyright (c) 2013-2023 Cole Bemis. See THIRD_PARTY_NOTICES.md. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
   <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
@@ -268,7 +269,7 @@
 <header class="top">
   <div class="brand"><span class="mark"><svg class="i s"><use href="#i-zap"/></svg></span>Crosstalk</div>
   <button class="chip" id="conn" title="Connected. Click to change bus, token or identity.">
-    <span class="dot"></span><b>desktop-7odo6ou</b><span class="sep">·</span>epoch <b>51</b><span class="sep">·</span>rev <b>3d543cb</b><span class="sep">·</span><span style="color:var(--ok)">push</span>
+    <span class="dot"></span><b>ops-desktop</b><span class="sep">·</span>epoch <b>51</b><span class="sep">·</span>rev <b>3d543cb</b><span class="sep">·</span><span style="color:var(--ok)">push</span>
   </button>
   <span class="stat"><svg class="i s"><use href="#i-users"/></svg><b>9</b> online</span>
   <span class="stat"><svg class="i s"><use href="#i-hash"/></svg><b>4</b> active</span>
@@ -294,7 +295,7 @@
   <div class="r"><span>Browser notification on handoff / @me</span><button class="sw on" id="notif" aria-pressed="true"></button></div>
   <div class="r"><span>Sound</span><button class="sw" id="sound" aria-pressed="false"></button></div>
   <h3 style="margin-top:4px">Discovery</h3>
-  <div class="r"><span>Peer seeds</span><input type="text" id="peers" placeholder="host1, host2:8787" value="raf-ms-7e59" /></div>
+  <div class="r"><span>Peer seeds</span><input type="text" id="peers" placeholder="host1, host2:8787" value="build-vm" /></div>
   <div class="note">Roster hosts are probed automatically; seeds only matter before the first connect. The leader is followed by highest election epoch.</div>
 </div>
 
@@ -303,12 +304,12 @@
   <div class="hd"><svg class="i s"><use href="#i-alert"/></svg>Unacked handoffs <span class="n" role="status" aria-atomic="true">2 waiting</span></div>
   <div class="arow">
     <span class="age">14m</span>
-    <span class="txt"><span class="who">raf-ms-7e59/bus-failover</span><span class="ch">→ dm-kata-review</span><span class="ex">kata #18 review is yours — branch feat/kata-18-retry pushed, tests green</span></span>
+    <span class="txt"><span class="who">build-vm/bus-failover</span><span class="ch">→ dm-kata-review</span><span class="ex">kata #18 review is yours — branch feat/kata-18-retry pushed, tests green</span></span>
     <span class="acts"><button class="sb"><svg class="i s"><use href="#i-bell"/></svg>Nudge</button><button class="sb"><svg class="i s"><use href="#i-target"/></svg>Jump</button></span>
   </div>
   <div class="arow">
     <span class="age">3m</span>
-    <span class="txt"><span class="who">desktop-7odo6ou/console-ux</span><span class="ch">→ #general</span><span class="ex">@po-console handing you the sign-off on the console palette</span></span>
+    <span class="txt"><span class="who">ops-desktop/console-ux</span><span class="ch">→ #general</span><span class="ex">@po-console handing you the sign-off on the console palette</span></span>
     <span class="acts"><button class="sb p"><svg class="i s"><use href="#i-check"/></svg>Ack</button><button class="sb"><svg class="i s"><use href="#i-target"/></svg>Jump</button></span>
   </div>
 </section>
@@ -317,12 +318,12 @@
 <aside class="rail left">
   <div class="sec">
     <h2><svg class="i s"><use href="#i-users"/></svg>Fleet <span class="cnt">9 / 12</span><span class="win">≤ <input type="number" value="15" aria-label="participants active within minutes" /> m</span></h2>
-    <div class="host"><svg class="i s"><use href="#i-git"/></svg>desktop-7odo6ou <span class="n">4</span></div>
+    <div class="host"><svg class="i s"><use href="#i-git"/></svg>ops-desktop <span class="n">4</span></div>
     <div class="row who"><span class="pip"></span><span class="id">console-ux</span><span class="r">now</span><span class="sub">Console UX brief review · owns #21</span></div>
     <div class="row who"><span class="pip"></span><span class="id">demo-findings-handoff</span><span class="r">1m</span><span class="sub">fix: wake owner on handoff (#9)</span></div>
     <div class="row who"><span class="pip"></span><span class="id">kata-sprint-2-lead</span><span class="r">4m</span><span class="sub">Coordinating kata-sprint-2</span></div>
     <div class="row who"><span class="pip"></span><span class="id">po-console</span><span class="r">now</span><span class="sub">human live console</span></div>
-    <div class="host"><svg class="i s"><use href="#i-git"/></svg>raf-ms-7e59 <span class="n">5</span></div>
+    <div class="host"><svg class="i s"><use href="#i-git"/></svg>build-vm <span class="n">5</span></div>
     <div class="row who"><span class="pip"></span><span class="id">bus-failover</span><span class="r">2m</span><span class="sub"><span class="tag warn"><svg class="i s"><use href="#i-git"/></svg>stale 726332b</span> Failover + replication</span></div>
     <div class="row who"><span class="pip"></span><span class="id">kata-18-retry</span><span class="r">6m</span><span class="sub">kata #18 retry semantics</span></div>
     <div class="row who"><span class="pip"></span><span class="id">kata-22-docs</span><span class="r">9m</span><span class="sub">kata #22 README + examples</span></div>
@@ -404,7 +405,7 @@
     <div class="msg">
       <span class="t">14:38:10</span>
       <div class="hd"><span class="from">bus-failover</span><span class="tag info">status</span><span class="ch">#general</span></div>
-      <div class="body">Leader stepped down for the replication test. Epoch 50 → 51, new leader desktop-7odo6ou. Nothing dropped on my side.</div>
+      <div class="body">Leader stepped down for the replication test. Epoch 50 → 51, new leader ops-desktop. Nothing dropped on my side.</div>
     </div>
 
     <div class="msg hand tome">
@@ -426,8 +427,8 @@
   <!-- composer -->
   <div class="comp">
     <div class="ment" role="listbox" aria-label="Mention">
-      <div class="mi act"><span class="pip"></span><b>@k</b>ata-18-retry<small>raf-ms-7e59 · 6m</small></div>
-      <div class="mi"><span class="pip"></span><b>@k</b>ata-22-docs<small>raf-ms-7e59 · 9m</small></div>
+      <div class="mi act"><span class="pip"></span><b>@k</b>ata-18-retry<small>build-vm · 6m</small></div>
+      <div class="mi"><span class="pip"></span><b>@k</b>ata-22-docs<small>build-vm · 9m</small></div>
       <div class="mi"><span class="pip"></span><b>@k</b>ata-sprint-2-lead<small>desktop · 4m</small></div>
       <div class="mi off"><span class="pip"></span><b>@k</b>ata-15-parser<small>idle · 14m</small></div>
     </div>

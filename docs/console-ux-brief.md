@@ -110,7 +110,7 @@ shows a small toast ("leader moved to <host>, resumed") instead of a status stri
 ## Verify against the live bus — don't ship on looks alone
 A live bus is running with real data. Dogfood before claiming it works:
 - Leader is on this desktop at `http://localhost:8787` (role=leader). Token (`CC_TOKEN`) is in
-  `~/.claude/.crosstalk` (line `CC_TOKEN=…`), also in `D:\projects\mailroom-stuff\cross-claude-bus.txt`.
+  `~/.claude/.crosstalk` (line `CC_TOKEN=…`).
 - Real data to render: channels `general` (fleet coordination) and `demo-sprint` (a completed multi-agent
   "kata sprint"), work-board projects `kata-sprint` + `kata-sprint-2` (items #1–#24 in various states),
   ~10 participants (desktop + Linux VM sessions).

@@ -205,10 +205,11 @@
   .wb-tag.wb-ref{color:var(--accent)}
 
   @media (max-width:1100px){ body.board-on{grid-template-columns:240px minmax(0,1fr) 0} body.board-on #boardpanel{display:none} }
-  @media (max-width:760px){ body,body.board-on{grid-template-columns:0 minmax(0,1fr) 0;grid-template-areas:"top top top" "attn attn attn" "main main main"} .left{display:none} .chip{max-width:40vw} }
+  @media (max-width:760px){ body,body.board-on{grid-template-columns:200px minmax(0,1fr) 0} .chip{max-width:40vw} .tb .hint{display:none} footer .field.fch{width:120px} }
 </style>
 </head>
 <body>
+<!-- Icons: paths derived from Feather Icons (https://feathericons.com), MIT License, Copyright (c) 2013-2023 Cole Bemis. See THIRD_PARTY_NOTICES.md. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
   <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></symbol>
@@ -470,7 +471,7 @@
     const rowHtml = (i) => {
       const off = i.status !== 'online';
       const stale = i.rev && leaderRev && i.rev !== leaderRev;
-      const detail = `${i.status} · ${agoTxt(i.last_seen) || i.last_seen}${i.rev ? ' · ' + i.rev : ''}`;
+      const detail = `${i.status} · ${agoTxt(i.last_seen) || i.last_seen || '—'}${i.rev ? ' · ' + i.rev : ''}`;
       return `<div class="who ${off ? 'offline' : ''}" data-id="${esc(i.instance_id)}" title="${esc(i.instance_id)}&#10;${esc(i.description || '')}&#10;${esc(detail)}"><span class="pip"></span>` +
         `<span class="id"><span class="nm">${esc(shortOf(i.instance_id))}</span>${stale ? `<span class="tag t-warn" title="This node runs ${esc(i.rev)}; the bus leader runs ${esc(leaderRev)}. Pull + re-arm to sync.">${ICON('git')}${esc(i.rev)}</span>` : ''}</span><span class="r">${esc(agoShort(i.last_seen))}</span>` +
         `<span class="sub">${esc(i.description || detail)}</span></div>`;
