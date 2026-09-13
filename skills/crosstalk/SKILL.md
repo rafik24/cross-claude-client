@@ -5,7 +5,7 @@ description: "Live cross-machine Claude chat + coordination over the Crosstalk b
 
 # Crosstalk live chat + coordination bus
 
-The real-time coordination channel between every Claude the PO runs across machines. Transport is the
+The real-time coordination channel between every Claude the operator runs across machines. Transport is the
 self-hosting Crosstalk bus — **no fixed server IP**; the leader is discovered (LAN beacon / tailnet peer-scan),
 highest election epoch wins. This machine is *enrolled* (it has the bus config `~/.claude/.crosstalk`, or the
 legacy `~/.claude/.cross-claude-bus`); the client scripts ship with this plugin (`${CLAUDE_PLUGIN_ROOT}` /
@@ -23,7 +23,7 @@ rule, **reply-only-if-addressed**, and the **ack-on-handoff** contract.
 The join hook gives you a **unique** default id `host/<branch>-<shortid>` (the `<shortid>` suffix exists
 because two sessions on the same branch used to both become `host/branch` and **collide** — never let that
 happen again). Immediately **rename yourself after this session's task/title** so peers can `@mention` you and
-the PO console is readable:
+the operator console is readable:
 
 ```
 node <live>/cc-name.mjs <session_id> "<what you're working on>"      # e.g. "Improve bus architecture"
@@ -58,7 +58,7 @@ A long message arrives **whole**: the receiver wraps it across as many notificat
 `‹part i/N›`), so a big DM is no longer delivered `…(truncated)`.
 
 **To reach a session, DM it (`dm-<shortname>`) or `@mention` it** — a bare `#general` broadcast will NOT
-wake other sessions (only the human PO console sees the firehose). Need the firehose yourself? arm the
+wake other sessions (only the human operator console sees the firehose). Need the firehose yourself? arm the
 receiver with `--all`, or `--channel <ch>` to watch one collaboration channel in full.
 
 **Broadcast to EVERY session — use `@all`** (or `@here` / `@everyone`). That keyword pierces the
@@ -73,7 +73,7 @@ Use `@all` sparingly — it wakes every session, so it's for estate-wide signals
 
 ## Ack on ownership change / attention (mandatory)
 When a peer **hands you ownership** (a `handoff`) or pushes something that **needs your attention / changes
-what you own**, you MUST acknowledge it into the SAME channel so the sender — and the PO console — see the task
+what you own**, you MUST acknowledge it into the SAME channel so the sender — and the operator console — see the task
 was **taken into a lane**, not dropped. An unacked handoff is flagged on the dashboard until you ack.
 
 ```
@@ -91,22 +91,25 @@ bus.** The lane already living in an area (repo cloned, worktree open, prior kno
 better than whoever happened to shout first.
 
 **Domains.** Tag work by the ONE area the main change lands in (name any second area for a relay). Coarse on
-purpose — if the tags were fine-grained nothing would match cleanly, so most issues map to a single primary:
+purpose — if the tags were fine-grained nothing would match cleanly, so most issues map to a single primary.
 
-| tag | covers | repo · paths |
-|---|---|---|
-| `client` | the desktop app — declare which half: *engine* (`core/ api/ providers/` — scan, classify, delete, licence-client, persistence, runtime) or *fe* (`frontend-next/src`) | `rafik24/mailroom` |
-| `licensing-backend` | Keygen / Stripe / trial / fraud server logic, DB migrations, VPS deploy | `rafik24/mailroom-licensing` (VPS) |
-| `admin-dashboard` | the licensing ops console — fraud origins, shared-cards, geo review/release | licensing dashboard |
-| `website` | mailroomclean.com marketing / FAQ / help centre **and the live update feed** (`updates.json` — the 5th version pin + the Rule 9 kill-switch) | `mailroom-site` |
-| `release` | build / packaging / signing (Azure Artifact Signing), anti-tamper, AV-FP handling, publishing the feed | `mailroom` `build/ deploy/` + the release repo |
-| `docs` | owning-doc currency (Rule 14) + the cross-repo `DOCS_INDEX` authority | `mailroom/docs` |
-| `infra` | the bus (`cross-claude-client`), `mailroom-claude-tools`, CI / gates / hooks, dev stands | tooling repos |
-| `gtm` | positioning / PRD / funnel copy — **PO-owned, rarely a session claim** | `mailroom-gtm` |
+> **Estate extension.** The concrete domain→repo routing table is *estate-specific*, so it is NOT shipped in
+> this generic plugin. Your estate may install a **private companion skill** (by convention
+> `crosstalk-<estate>`, e.g. `crosstalk-mailroom`) that defines your real tags, repos and paths — if one is
+> available, **load it and use its table** for dispatch. Absent one, fall back to these generic domains:
 
-**The handshake** — when work needs an owner (a PO ask, or a lane surfacing a new issue):
-1. **Dispatch, don't open-call.** `DISPATCH #N [<domain>] — <one line>`. The PO does this too: dispatch to a
-   domain, never `@all "can someone take X"` — the open call is what spawns the races.
+| tag | covers |
+|---|---|
+| `app` | the user-facing application / client |
+| `backend` | server-side services, APIs, DB migrations, deploy |
+| `website` | marketing / docs site + any release/update feed it serves |
+| `release` | build / packaging / signing / publishing |
+| `docs` | documentation currency |
+| `infra` | the coordination bus, CI / gates / hooks, dev environments |
+
+**The handshake** — when work needs an owner (a request from the operator, or a lane surfacing a new issue):
+1. **Dispatch, don't open-call.** `DISPATCH #N [<domain>] — <one line>`. The operator does this too: dispatch
+   to a domain, never `@all "can someone take X"` — the open call is what spawns the races.
 2. **Affinity window (~2 min): declare, don't grab.** Lanes with standing reply `AFFINITY #N HIGH|LOW —
    <evidence>`; a lane with no business in that domain stays silent. Affinity is self-assessed from real
    signals: a **live worktree** in the repo/paths, your **session name's** domain, loaded context / prior
@@ -117,9 +120,9 @@ purpose — if the tags were fine-grained nothing would match cleanly, so most i
    A bus ack coordinates; the GitHub **assignee reserves**. This is the backstop that keeps the survivor
    unique even when the handshake itself races.
 5. **Cross-domain → split + relay, never reach across blind.** File the sub-issue in YOUR domain (where you
-   have context) and hand the other domain's part to its lane as an ACK-required `handoff`. E.g. a `client`
-   lane that traced a VPS ban files the client fix itself and relays the server change to the
-   `licensing-backend` lane — it does not edit a backend it doesn't know.
+   have context) and hand the other domain's part to its lane as an ACK-required `handoff`. E.g. an `app`
+   lane that traced a fault into the `backend` files the app-side fix itself and relays the server change to
+   the `backend` lane — it does not edit a service it doesn't know.
 
 **Before you claim ANYTHING — even fresh off a handover.** A handed-over session starts blind to who owns
 what, which is how handovers still collided. So first read the roster (`ListAgents` + the console) AND the
@@ -138,11 +141,11 @@ node <live>/cc-ack.mjs  <your-id> <channel> 'note'  # acknowledge a handoff
 - **Typed messages:** `message · status · request · response · handoff · done`. `handoff`/`done` carry the
   ownership semantics; a `handoff` obliges the receiver to `ack`.
 
-## The PO console (dashboard)
+## The operator console (dashboard)
 `open <live>/cc-console.html`. It shows **only channels + participants active in the last 15 min** (both
 windows adjustable in the settings strip; a "show all" toggle reveals the rest), **highlights channels with
 new content since you last looked** (amber dot), autocompletes **`@name`** in the composer (type `@`, arrow-
-keys, Enter), and banners any **unacked handoff**. The PO watches it and may DM you or broadcast.
+keys, Enter), and banners any **unacked handoff**. The operator watches it and may DM you or broadcast.
 
 ## Deprecated — do NOT use
 The old file board (`send-msg.sh`, `watch-msgs.sh`, `holdings.sh`, `session-<topic>.md` declarations, `msg/`)
