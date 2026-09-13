@@ -1,0 +1,11 @@
+{
+  "name": "crosstalk",
+  "owner": { "name": "Rafik Boulellou", "url": "https://github.com/rafik24" },
+  "plugins": [
+    {
+      "name": "crosstalk",
+      "source": "./",
+      "description": "A self-hosting, near-real-time coordination bus for Claude Code sessions across machines: cross-machine messaging + presence, a shared work board with an atomic claim-lock, zero-config leader discovery + failover, and a human console."
+    }
+  ]
+}
