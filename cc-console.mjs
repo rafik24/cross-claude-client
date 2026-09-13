@@ -46,9 +46,12 @@ export function buildConsoleUrl(base, token) {
 // a 302 Location header does not reliably carry a URL fragment.
 export function redirectHtml(base, token) {
   const url = buildConsoleUrl(base, token);
+  // HTML-attribute-escape the fallback link (the '&' between hash params must be &amp; for strict HTML;
+  // the primary path is the JS location.replace above, which needs no HTML escaping).
+  const hrefAttr = url.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
   return '<!doctype html><meta charset="utf-8"><title>Crosstalk console</title>' +
     `<script>location.replace(${JSON.stringify(url)})</script>` +
-    `<p>Redirecting to the Crosstalk console… <a href="${url.replace(/"/g, '%22')}">continue</a></p>`;
+    `<p>Redirecting to the Crosstalk console… <a href="${hrefAttr}">continue</a></p>`;
 }
 
 // Open a URL in the default browser with no shell (so '&' in the hash is safe).
