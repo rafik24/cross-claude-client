@@ -42,13 +42,17 @@ export function loadConfig() {
     }
   } catch {}
   const token = process.env.CC_TOKEN || out.CC_TOKEN || '';
+  // Admin scope secret (gates /cc/export, /cc/stepdown, /cc/import). Read from the config file too,
+  // not just the env — so "set CC_ADMIN_KEY in ~/.claude/.crosstalk" works for any launch method
+  // (systemd/Scheduled-Task/manual), matching ENROLLMENT. Env still wins.
+  const admin = process.env.CC_ADMIN_KEY || out.CC_ADMIN_KEY || '';
   // CC_BASE is a manual PIN/override (back-compat). New configs omit it and rely on discovery.
   const pin = (process.env.CC_BASE || out.CC_BASE || '').replace(/\/$/, '') || null;
   const port = parseInt(process.env.CC_PORT || out.CC_PORT) || DEFAULT_PORT;
   const beaconPort = parseInt(process.env.CC_BEACON_PORT || out.CC_BEACON_PORT) || DEFAULT_BEACON_PORT;
   const peers = (process.env.CC_PEERS || out.CC_PEERS || '')
     .split(',').map((s) => s.trim()).filter(Boolean);
-  return { token, pin, port, beaconPort, peers };
+  return { token, admin, pin, port, beaconPort, peers };
 }
 
 // --- cache ---

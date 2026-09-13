@@ -86,7 +86,7 @@ function supervisorLive() {
 // (DB overwrite). When set it is what the internal callers present and what /cc/import checks;
 // when unset, /cc/import (like the server's export/stepdown) is loopback-only, so cross-host
 // replication/migration then REQUIRE CC_ADMIN_KEY on every node.
-const ADMIN_KEY = process.env.CC_ADMIN_KEY || '';
+const ADMIN_KEY = process.env.CC_ADMIN_KEY || loadConfig().admin || '';
 // Cap the /cc/import body so a runaway/abusive upload can't accumulate unboundedly in memory.
 const MAX_IMPORT_BYTES = (parseInt(process.env.CC_MAX_IMPORT_MB) || 256) * 1024 * 1024;
 
@@ -140,6 +140,10 @@ function spawnLeader(epoch, port, token) {
       CC_EPOCH: String(epoch),
       CC_HOST: HOST,
       CC_DATA_DIR: DATA_DIR,
+      // Pass the admin key through explicitly so the server honours it even when it came from the
+      // config FILE (loadConfig) rather than the ambient env — otherwise /cc/export etc. stay
+      // loopback-only and cross-host replication/failover breaks.
+      CC_ADMIN_KEY: ADMIN_KEY,
     },
     stdio: 'inherit',
     // Never pop a console window on Windows when a console-less/detached supervisor spawns the

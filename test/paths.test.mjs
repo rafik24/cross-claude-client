@@ -11,6 +11,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { migrateDir, dataDir, configPath } from '../cc-paths.mjs';
+import { loadConfig } from '../cc-discover.mjs';
 
 let failed = false;
 const ok = (c, m) => { if (!c) { failed = true; console.error('  ✗', m); } else console.log('  ✓', m); };
@@ -93,7 +94,21 @@ try {
     delete process.env.CC_BUS_CONFIG;
   }
 
-  console.log(failed ? '\n❌ paths.test FAILED' : '\n✅ paths.test: all assertions passed (migrateDir preserve/idempotent/create + env overrides)');
+  // 5. loadConfig reads CC_ADMIN_KEY from the config FILE (not just env) — required so the admin
+  //    scope works for a systemd/manual launch, not only the config-sourcing hook path.
+  {
+    const cfg = join(scratch(), 'cfg');
+    writeFileSync(cfg, 'CC_TOKEN=t\nCC_ADMIN_KEY=k-from-file\n');
+    const savedC = process.env.CC_BUS_CONFIG, savedA = process.env.CC_ADMIN_KEY;
+    delete process.env.CC_ADMIN_KEY; process.env.CC_BUS_CONFIG = cfg;
+    ok(loadConfig().admin === 'k-from-file', 'loadConfig reads CC_ADMIN_KEY from the config file');
+    process.env.CC_ADMIN_KEY = 'k-from-env';
+    ok(loadConfig().admin === 'k-from-env', 'env CC_ADMIN_KEY overrides the file');
+    if (savedC !== undefined) process.env.CC_BUS_CONFIG = savedC; else delete process.env.CC_BUS_CONFIG;
+    if (savedA !== undefined) process.env.CC_ADMIN_KEY = savedA; else delete process.env.CC_ADMIN_KEY;
+  }
+
+  console.log(failed ? '\n❌ paths.test FAILED' : '\n✅ paths.test: all assertions passed (migrateDir preserve/idempotent/create + env overrides + loadConfig admin)');
 } catch (e) {
   failed = true; console.error('❌ paths.test ERROR:', e.stack || e.message);
 }
