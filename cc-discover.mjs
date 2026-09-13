@@ -127,7 +127,21 @@ function lanSolicit(beaconPort, timeoutMs = 400) {
     let sock;
     try { sock = dgram.createSocket({ type: 'udp4', reuseAddr: true }); }
     catch { return resolve(found); }
-    const done = () => { try { sock.close(); } catch {} resolve(found); };
+    // #10: done() is reachable from BOTH the 'error' handler and the timeout below. A
+    // second sock.close() runs against a handle already in UV_HANDLE_CLOSING, which trips
+    // a NATIVE libuv assertion on Windows (src\win\async.c) — an abort, not a JS throw, so
+    // the try/catch cannot swallow it and the process dies with exit 127. Concurrency
+    // raises the double-fire odds, matching the "intermittent under load" report. Make
+    // done() fire exactly once and cancel the pending timer.
+    let settled = false;
+    let timer;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { sock.close(); } catch {}
+      resolve(found);
+    };
     sock.on('error', done);
     sock.on('message', (buf, rinfo) => {
       try {
@@ -151,7 +165,7 @@ function lanSolicit(beaconPort, timeoutMs = 400) {
         }
       }
       for (const ip of targets) { try { sock.send(payload, beaconPort, ip); } catch {} }
-      setTimeout(done, timeoutMs);
+      timer = setTimeout(done, timeoutMs);
     });
   });
 }

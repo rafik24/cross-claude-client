@@ -398,6 +398,29 @@ export function createRestRouter(db) {
       const raw = (req.body || {}).owner;
       const newOwner = isFilledString(raw) ? raw : null;
       const item = await db.transferWorkItem(id, newOwner);
+
+      // #9: a board handoff was otherwise SILENT — transferWorkItem changes ownership in
+      // the DB but nothing wakes the new owner over the bus, so a verifier that isn't
+      // polling `cc-work list --mine` never learns work is theirs. Emit an addressed
+      // `handoff` message so their cc-ws/cc-poll wakes them (»HANDOFF — ACK REQUIRED«).
+      // db.sendMessage is decorated (server.mjs) to persist AND broadcast via the ws hub.
+      // Only on a real assignment (not a release, owner -> null); never let a failed
+      // notification fail the handoff itself.
+      if (newOwner) {
+        try {
+          const from = isFilledString(by) ? by : 'cc-work';
+          const title = String(item?.title ?? '').slice(0, 120);
+          await db.createChannel('general', null);
+          await db.sendMessage(
+            'general',
+            from,
+            `@${newOwner} board handoff — work #${id} is now yours: "${title}"`,
+            'handoff',
+          );
+        } catch (err) {
+          console.error('[rest-api] handoff notify failed (transfer still applied):', err);
+        }
+      }
       res.json({ ok: true, item });
     })
   );

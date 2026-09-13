@@ -283,6 +283,28 @@ async function main() {
     assert.equal(body.reason, 'not_owner', '403 carries a machine-readable reason');
     assert.equal(body.owner, 'sessionA', '403 reports the holding owner');
 
+    // #9: a board handoff to a NEW owner must emit an addressed `handoff` chat message,
+    // so the recipient is woken over the bus (a silent DB transfer left verifiers unaware
+    // until they happened to poll `list --mine`). Self-contained: own item + own owners.
+    res = await jsonPost(`${base}/work`, { title: 'handoff-notify item' });
+    const hoId = (await res.json()).item.id;
+    await jsonPost(`${base}/work/${hoId}/claim`, { owner: 'ownerX' });
+    res = await jsonPost(`${base}/work/${hoId}/handoff`, { owner: 'ownerY', by: 'ownerX' });
+    assert.equal(res.status, 200, 'a handoff by the current owner should succeed');
+    assert.equal((await res.json()).item.owner, 'ownerY', 'ownership transfers to the new owner');
+    let genMsgs = (await (await fetch(`${base}/messages/general`)).json()).messages;
+    const hoMsg = genMsgs.find((m) => m.message_type === 'handoff' && m.content.includes('@ownerY'));
+    assert.ok(hoMsg, '#9: a handoff notification addressed to the new owner is posted');
+    assert.match(hoMsg.content, new RegExp(`#${hoId}\\b`), '#9: the notification names the work item');
+    // a RELEASE (owner -> null) must NOT emit a handoff notification.
+    const genBefore = (await (await fetch(`${base}/messages/general`)).json()).messages.length;
+    res = await jsonPost(`${base}/work/${hoId}/handoff`, { owner: '', by: 'ownerY' });
+    assert.equal(res.status, 200, 'releasing an item (empty owner) should succeed');
+    const genAfter = (await (await fetch(`${base}/messages/general`)).json()).messages.length;
+    assert.equal(genAfter, genBefore, '#9: releasing an item posts no handoff notification');
+    // keep this throwaway item out of the later state-filter assertions
+    await jsonPost(`${base}/work/${hoId}/state`, { state: 'abandoned', by: 'ownerY' });
+
     // 3) invalid state -> 400 (validation runs before the owner-gate) ----------
     res = await jsonPost(`${base}/work/${workId}/state`, { state: 'not-a-real-state' });
     assert.equal(res.status, 400, 'an invalid state should be 400');
