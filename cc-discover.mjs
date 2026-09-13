@@ -46,13 +46,17 @@ export function loadConfig() {
   // not just the env — so "set CC_ADMIN_KEY in ~/.claude/.crosstalk" works for any launch method
   // (systemd/Scheduled-Task/manual), matching ENROLLMENT. Env still wins.
   const admin = process.env.CC_ADMIN_KEY || out.CC_ADMIN_KEY || '';
+  // Interface to bind when THIS node hosts (leader / failover-promoted). Read from the config too,
+  // not just env — else a host (or a supervisor that gets promoted) silently binds loopback and is
+  // unreachable off-box. Empty ⇒ the server's own default (loopback, per refuse-run-open). Env wins.
+  const bind = process.env.CC_BIND || out.CC_BIND || '';
   // CC_BASE is a manual PIN/override (back-compat). New configs omit it and rely on discovery.
   const pin = (process.env.CC_BASE || out.CC_BASE || '').replace(/\/$/, '') || null;
   const port = parseInt(process.env.CC_PORT || out.CC_PORT) || DEFAULT_PORT;
   const beaconPort = parseInt(process.env.CC_BEACON_PORT || out.CC_BEACON_PORT) || DEFAULT_BEACON_PORT;
   const peers = (process.env.CC_PEERS || out.CC_PEERS || '')
     .split(',').map((s) => s.trim()).filter(Boolean);
-  return { token, admin, pin, port, beaconPort, peers };
+  return { token, admin, bind, pin, port, beaconPort, peers };
 }
 
 // --- cache ---

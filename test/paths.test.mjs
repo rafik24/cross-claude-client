@@ -98,14 +98,16 @@ try {
   //    scope works for a systemd/manual launch, not only the config-sourcing hook path.
   {
     const cfg = join(scratch(), 'cfg');
-    writeFileSync(cfg, 'CC_TOKEN=t\nCC_ADMIN_KEY=k-from-file\n');
-    const savedC = process.env.CC_BUS_CONFIG, savedA = process.env.CC_ADMIN_KEY;
-    delete process.env.CC_ADMIN_KEY; process.env.CC_BUS_CONFIG = cfg;
+    writeFileSync(cfg, 'CC_TOKEN=t\nCC_ADMIN_KEY=k-from-file\nCC_BIND=0.0.0.0\n');
+    const savedC = process.env.CC_BUS_CONFIG, savedA = process.env.CC_ADMIN_KEY, savedB = process.env.CC_BIND;
+    delete process.env.CC_ADMIN_KEY; delete process.env.CC_BIND; process.env.CC_BUS_CONFIG = cfg;
     ok(loadConfig().admin === 'k-from-file', 'loadConfig reads CC_ADMIN_KEY from the config file');
+    ok(loadConfig().bind === '0.0.0.0', 'loadConfig reads CC_BIND from the config file');
     process.env.CC_ADMIN_KEY = 'k-from-env';
     ok(loadConfig().admin === 'k-from-env', 'env CC_ADMIN_KEY overrides the file');
     if (savedC !== undefined) process.env.CC_BUS_CONFIG = savedC; else delete process.env.CC_BUS_CONFIG;
     if (savedA !== undefined) process.env.CC_ADMIN_KEY = savedA; else delete process.env.CC_ADMIN_KEY;
+    if (savedB !== undefined) process.env.CC_BIND = savedB; else delete process.env.CC_BIND;
   }
 
   console.log(failed ? '\n❌ paths.test FAILED' : '\n✅ paths.test: all assertions passed (migrateDir preserve/idempotent/create + env overrides + loadConfig admin)');

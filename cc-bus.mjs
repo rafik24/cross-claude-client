@@ -86,7 +86,10 @@ function supervisorLive() {
 // (DB overwrite). When set it is what the internal callers present and what /cc/import checks;
 // when unset, /cc/import (like the server's export/stepdown) is loopback-only, so cross-host
 // replication/migration then REQUIRE CC_ADMIN_KEY on every node.
-const ADMIN_KEY = process.env.CC_ADMIN_KEY || loadConfig().admin || '';
+const _bootCfg = loadConfig();
+const ADMIN_KEY = process.env.CC_ADMIN_KEY || _bootCfg.admin || '';
+// Interface the spawned server binds. From env or the config file; empty ⇒ server default (loopback).
+const BIND = process.env.CC_BIND || _bootCfg.bind || '';
 // Cap the /cc/import body so a runaway/abusive upload can't accumulate unboundedly in memory.
 const MAX_IMPORT_BYTES = (parseInt(process.env.CC_MAX_IMPORT_MB) || 256) * 1024 * 1024;
 
@@ -144,6 +147,10 @@ function spawnLeader(epoch, port, token) {
       // config FILE (loadConfig) rather than the ambient env — otherwise /cc/export etc. stay
       // loopback-only and cross-host replication/failover breaks.
       CC_ADMIN_KEY: ADMIN_KEY,
+      // Same for the bind interface: honour a config-file CC_BIND so a host (or a failover-promoted
+      // supervisor) serves off-box instead of silently binding loopback. Only set it when non-empty
+      // so an unset value leaves the server's own loopback default intact.
+      ...(BIND ? { CC_BIND: BIND } : {}),
     },
     stdio: 'inherit',
     // Never pop a console window on Windows when a console-less/detached supervisor spawns the
