@@ -93,6 +93,7 @@ const BIND = process.env.CC_BIND || _bootCfg.bind || '';
 // file:// console grant for the spawned server (see server.mjs allowFileOrigin). From env or the
 // config file; only '1' enables it.
 const ALLOW_FILE_ORIGIN = process.env.CC_ALLOW_FILE_ORIGIN || _bootCfg.allowFileOrigin || '';
+if (ALLOW_FILE_ORIGIN && ALLOW_FILE_ORIGIN !== '1') console.warn(`[cc-bus] CC_ALLOW_FILE_ORIGIN=${ALLOW_FILE_ORIGIN} is not '1' — the server treats it as OFF (file:// consoles stay blocked)`);
 // Cap the /cc/import body so a runaway/abusive upload can't accumulate unboundedly in memory.
 const MAX_IMPORT_BYTES = (parseInt(process.env.CC_MAX_IMPORT_MB) || 256) * 1024 * 1024;
 

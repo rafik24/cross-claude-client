@@ -106,6 +106,8 @@ try {
     ok(loadConfig().allowFileOrigin === '1', 'loadConfig reads CC_ALLOW_FILE_ORIGIN from the config file (the supervisor forwards it to the server)');
     process.env.CC_ADMIN_KEY = 'k-from-env';
     ok(loadConfig().admin === 'k-from-env', 'env CC_ADMIN_KEY overrides the file');
+    process.env.CC_ALLOW_FILE_ORIGIN = '0';
+    ok(loadConfig().allowFileOrigin === '0', 'env CC_ALLOW_FILE_ORIGIN=0 overrides a 1 in the file (fails closed)');
     if (savedC !== undefined) process.env.CC_BUS_CONFIG = savedC; else delete process.env.CC_BUS_CONFIG;
     if (savedA !== undefined) process.env.CC_ADMIN_KEY = savedA; else delete process.env.CC_ADMIN_KEY;
     if (savedB !== undefined) process.env.CC_BIND = savedB; else delete process.env.CC_BIND;

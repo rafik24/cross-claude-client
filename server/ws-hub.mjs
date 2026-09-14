@@ -112,8 +112,9 @@ function makeDecoder(onFrame, { maxBuffer = MAX_WS_BUFFER, onOverflow = () => {}
 // present Origin must be localhost, the same host we were dialed on, or explicitly allowlisted.
 // This blocks a malicious web page from silently opening a cross-origin WS to a bus reachable
 // from the victim's browser. The literal origin `null` is what a console opened as a file:// page
-// sends; it is allowed only when the caller opts in (CC_ALLOW_FILE_ORIGIN, default on — the bus
-// carries no cookies, so a bearer token is still required for anything the grant would unlock).
+// sends; it is allowed only when the caller opts in (CC_ALLOW_FILE_ORIGIN=1, OFF by default: any web
+// page can forge a null origin from a sandboxed iframe. The bus carries no cookies, so a bearer
+// token is still required for anything beyond the public endpoints).
 export function originAllowed(origin, req, allowedOrigins, allowFileOrigin = false) {
   if (!origin) return true;                          // non-browser client
   if (origin === 'null') return !!allowFileOrigin;   // file:// console
