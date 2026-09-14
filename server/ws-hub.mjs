@@ -107,12 +107,16 @@ function makeDecoder(onFrame, { maxBuffer = MAX_WS_BUFFER, onOverflow = () => {}
   };
 }
 
-// Decide whether a browser Origin may open the socket. No Origin (Node clients — the bridge —
-// never send one) is always allowed; a present Origin must be localhost, the same host we were
-// dialed on, or explicitly allowlisted. This blocks a malicious web page from silently opening
-// a cross-origin WS to a bus reachable from the victim's browser.
-function originAllowed(origin, req, allowedOrigins) {
+// Decide whether a browser Origin may open the socket (and, via server.mjs, receive CORS grants
+// on the REST API). No Origin (Node clients — the bridge — never send one) is always allowed; a
+// present Origin must be localhost, the same host we were dialed on, or explicitly allowlisted.
+// This blocks a malicious web page from silently opening a cross-origin WS to a bus reachable
+// from the victim's browser. The literal origin `null` is what a console opened as a file:// page
+// sends; it is allowed only when the caller opts in (CC_ALLOW_FILE_ORIGIN, default on — the bus
+// carries no cookies, so a bearer token is still required for anything the grant would unlock).
+export function originAllowed(origin, req, allowedOrigins, allowFileOrigin = false) {
   if (!origin) return true;                          // non-browser client
+  if (origin === 'null') return !!allowFileOrigin;   // file:// console
   if (allowedOrigins.includes(origin)) return true;  // explicit allowlist
   let host;
   try { host = new URL(origin).hostname; } catch { return false; }
@@ -125,7 +129,7 @@ function originAllowed(origin, req, allowedOrigins) {
 //   token: the shared bus token; a WS connect must present it (Authorization: Bearer <t>,
 //          or ?token=/?api_key= for browsers that cannot set handshake headers).
 //   allowedOrigins: extra browser Origins permitted beyond localhost/same-host.
-export function attachWsHub(httpServer, { token, log = () => {}, allowedOrigins = [] } = {}) {
+export function attachWsHub(httpServer, { token, log = () => {}, allowedOrigins = [], allowFileOrigin = false } = {}) {
   // identity -> Set<socket>. A box may briefly hold two (old + reconnect) — both get the push.
   const conns = new Map();
 
@@ -146,7 +150,7 @@ export function attachWsHub(httpServer, { token, log = () => {}, allowedOrigins 
     if (url.pathname !== '/cc/ws') { socket.destroy(); return; }
 
     // Origin allowlist (M4): reject cross-origin browser upgrades before anything else.
-    if (!originAllowed(req.headers.origin, req, allowedOrigins)) {
+    if (!originAllowed(req.headers.origin, req, allowedOrigins, allowFileOrigin)) {
       socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;

@@ -256,6 +256,63 @@ async function main() {
     }
   }
 
+  // ---- CORS: the browser console fetching cross-origin or from a file:// page ----------
+  {
+    const dir = tmpDataDir();
+    process.env.CC_DATA_DIR = dir;
+    // Own ports: pass 1 just closed PORT, and undici's pool would replay a dead keep-alive.
+    const CORS_PORT = 8831, CORS_PORT2 = 8832;
+    const app = await startServer({
+      port: CORS_PORT, apiKey: TOKEN, host: 'test-host', epoch: 7,
+      createDB: createStubDB, createRestRouter: createStubRouter, log: () => {},
+      allowedOrigins: 'http://console.example',
+    });
+    try {
+      const B = `http://127.0.0.1:${CORS_PORT}`;
+      const h = (r, n) => r.headers.get(n);
+      // preflight from an allowlisted origin is granted, with the Authorization header allowed
+      let r = await fetch(B + '/api/instances', { method: 'OPTIONS', headers: { origin: 'http://console.example', 'access-control-request-method': 'GET', 'access-control-request-headers': 'authorization' } });
+      assert.equal(r.status, 204, 'preflight answers 204');
+      assert.equal(h(r, 'access-control-allow-origin'), 'http://console.example', 'allowlisted origin is reflected');
+      assert.match(h(r, 'access-control-allow-headers') || '', /authorization/i, 'bearer header is allowed');
+      assert.equal(h(r, 'access-control-allow-credentials'), null, 'no credentials flag: the bus has no cookies');
+      // localhost origins (a dev proxy, a local serve) are granted without configuration
+      r = await fetch(B + '/cc/whoami', { headers: { origin: 'http://localhost:8790' } });
+      assert.equal(h(r, 'access-control-allow-origin'), 'http://localhost:8790', 'localhost origin reflected');
+      // a file:// console (Origin: null) is granted by default
+      r = await fetch(B + '/cc/whoami', { headers: { origin: 'null' } });
+      assert.equal(h(r, 'access-control-allow-origin'), 'null', 'file:// origin granted by default');
+      // an arbitrary web page gets no grant at all (and the request itself still needs the token)
+      r = await fetch(B + '/cc/whoami', { headers: { origin: 'http://evil.example' } });
+      assert.equal(h(r, 'access-control-allow-origin'), null, 'unknown origin gets no CORS grant');
+      r = await fetch(B + '/api/instances', { headers: { origin: 'http://evil.example' } });
+      assert.equal(r.status, 401, 'and the API stays token-gated regardless of origin');
+      console.log('server.test: PASS (CORS policy: allowlist, localhost, file://, deny unknown)');
+    } finally {
+      await app.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    // CC_ALLOW_FILE_ORIGIN=0 (opts.allowFileOrigin=false) withdraws the file:// grant only
+    const dir2 = tmpDataDir();
+    process.env.CC_DATA_DIR = dir2;
+    const app2 = await startServer({
+      port: CORS_PORT2, apiKey: TOKEN, host: 'test-host', epoch: 7,
+      createDB: createStubDB, createRestRouter: createStubRouter, log: () => {},
+      allowFileOrigin: false,
+    });
+    try {
+      const B = `http://127.0.0.1:${CORS_PORT2}`;
+      let r = await fetch(B + '/cc/whoami', { headers: { origin: 'null' } });
+      assert.equal(r.headers.get('access-control-allow-origin'), null, 'file:// origin denied when switched off');
+      r = await fetch(B + '/cc/whoami', { headers: { origin: 'http://127.0.0.1:9999' } });
+      assert.equal(r.headers.get('access-control-allow-origin'), 'http://127.0.0.1:9999', 'loopback origins unaffected');
+      console.log('server.test: PASS (CC_ALLOW_FILE_ORIGIN=0)');
+    } finally {
+      await app2.close();
+      fs.rmSync(dir2, { recursive: true, force: true });
+    }
+  }
+
   // ---- Refuse-run-open (M1) ----------------------------------------------------
   {
     // No token + a non-loopback bind must REFUSE to start (no side effects — never binds).
