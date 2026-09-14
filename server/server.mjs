@@ -25,7 +25,7 @@ import express from 'express';
 
 import { createDB } from './db.mjs';
 import { createRestRouter } from './rest-api.mjs';
-import { attachWsHub } from './ws-hub.mjs';
+import { attachWsHub, originAllowed } from './ws-hub.mjs';
 import { codeRev } from '../cc-rev.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -64,6 +64,11 @@ function resolveConfig(opts = {}) {
     // Extra browser Origins allowed to open the WS (beyond localhost/same-host). csv.
     allowedOrigins: String(opts.allowedOrigins ?? env.CC_WS_ALLOWED_ORIGINS ?? '')
       .split(',').map((s) => s.trim()).filter(Boolean),
+    // A console opened as a file:// page sends `Origin: null` — but so does any web page that
+    // wants to, via a sandboxed iframe, so it is OFF by default. CC_ALLOW_FILE_ORIGIN=1 grants
+    // it for both the REST CORS grant and the WS upgrade (the launcher-served /console needs
+    // nothing: it is same-origin).
+    allowFileOrigin: opts.allowFileOrigin ?? (env.CC_ALLOW_FILE_ORIGIN === '1'),
   };
 }
 
@@ -170,6 +175,30 @@ export async function startServer(opts = {}) {
   app.disable('x-powered-by');
   // Bound the request body (M3): a message/work payload is tiny; 64kb is generous and stops a
   // memory-blowup POST. Over-limit bodies surface as a 413 via the fallback error handler.
+  // ---- CORS for the browser console ---------------------------------------------------
+  // The console may be served by a different node than the leader it follows, or opened as
+  // a file:// page, so its fetches are cross-origin. One policy for REST and WS: reflect the
+  // Origin only when originAllowed() says so (localhost, same host, CC_WS_ALLOWED_ORIGINS,
+  // and `null` for file:// only with CC_ALLOW_FILE_ORIGIN=1). No credentials flag — the bus
+  // uses bearer tokens, never cookies — so a reflected origin unlocks only the public
+  // endpoints plus whatever the token already unlocks. Mounted before the body parser so a
+  // 413/400 from express.json still reaches a cross-origin console as a status, not an
+  // opaque network error. `Vary: Origin` is always set: the grant differs per origin.
+  app.use((req, res, next) => {
+    res.vary('Origin');
+    const origin = req.headers.origin;
+    if (origin && originAllowed(origin, req, config.allowedOrigins, config.allowFileOrigin)) {
+      res.set('Access-Control-Allow-Origin', origin);
+      res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');   // the API is GET/POST only
+      res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      res.set('Access-Control-Max-Age', '600');
+    }
+    // Preflights carry no credentials and never touch a route, so they neither authenticate
+    // nor count as an auth failure: answer before requireAuth.
+    if (req.method === 'OPTIONS') return res.status(204).end();
+    next();
+  });
+
   app.use(express.json({ limit: '64kb' }));
 
   // ---- Public endpoints (no auth) --------------------------------------------------
@@ -266,7 +295,7 @@ export async function startServer(opts = {}) {
 
   // ---- WebSocket hub + push wiring -------------------------------------------------
   const server = http.createServer(app);
-  const hub = attachWsHub(server, { token: config.apiKey, log, allowedOrigins: config.allowedOrigins });
+  const hub = attachWsHub(server, { token: config.apiKey, log, allowedOrigins: config.allowedOrigins, allowFileOrigin: config.allowFileOrigin, authFailLimiter, clientIp });
 
   // Decorate sendMessage so every insert fans out over the socket hub (see file header).
   const rawSendMessage = db.sendMessage.bind(db);

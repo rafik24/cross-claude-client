@@ -239,9 +239,18 @@ below raises the floor; it does not make the bus safe to expose to the open inte
   header; only the **browser** console (which can't set WS handshake headers) falls back to
   `?token=` in the WS URL. The server **never logs request URLs**, but treat the browser console
   as same-origin/localhost and don't paste that URL around.
-- **WebSocket Origin allowlist.** Cross-origin browser upgrades are rejected (only localhost,
-  the same host, or `CC_WS_ALLOWED_ORIGINS` are allowed); non-browser Node clients (no `Origin`)
-  are unaffected.
+- **Browser Origin policy (WS upgrade + REST CORS).** One allowlist covers both: localhost,
+  the same host the request was dialed on, and anything in `CC_WS_ALLOWED_ORIGINS`. An allowed
+  origin is reflected in `Access-Control-Allow-Origin` with no credentials flag — the bus has
+  no cookies, so the grant unlocks only the public endpoints (`/health`, `/cc/whoami`) plus
+  whatever the bearer token already unlocks. Any other origin gets no CORS grant and its WS
+  upgrade is refused (403). The `null` origin a console opened as a `file://` page sends is
+  **off by default** — any web page can forge it from a sandboxed iframe — and is enabled with
+  `CC_ALLOW_FILE_ORIGIN=1` on the leader; the launcher-served `/console` is same-origin and
+  needs nothing. A bad `?token=` on the WS upgrade counts against the same per-IP auth-failure
+  limiter as REST (`429`). Non-browser Node clients (no `Origin`) are unaffected. The operator
+  console subscribes with `?firehose=1` to receive every message over the socket; lanes get
+  only what is addressed to them.
 - **Bounds + rate limits (on by default).** 64 KB request-body cap (`413` over it), a bounded
   `/cc/import` read and WS frame buffer, and per-IP throttling of auth failures and message/claim
   churn (`429` on trip). Tunable via `CC_RL_*` / `CC_MAX_IMPORT_MB`.

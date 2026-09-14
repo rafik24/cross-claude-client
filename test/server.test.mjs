@@ -17,6 +17,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import http from 'node:http';
 import express from 'express';
 
 import { startServer } from '../server/server.mjs';
@@ -233,6 +234,20 @@ async function main() {
   delete process.env.CC_ADMIN_KEY;
   delete process.env.MCP_API_KEY;
 
+  // Raw WS handshake → resolves to the HTTP status (101 on success). Node's WebSocket client
+  // hides the status of a refused upgrade; http.request surfaces it via 'response'.
+  const upgrade = (port, { origin, token, identity = 'probe' } = {}) => new Promise((resolve) => {
+    const q = `identity=${identity}${token ? '&token=' + encodeURIComponent(token) : ''}`;
+    const req = http.request({
+      host: '127.0.0.1', port, path: '/cc/ws?' + q,
+      headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', ...(origin ? { Origin: origin } : {}) },
+    });
+    req.on('upgrade', (_res, socket) => { socket.destroy(); resolve(101); });
+    req.on('response', (res) => { res.resume(); resolve(res.statusCode); });
+    req.on('error', () => resolve(0));
+    req.end();
+  });
+
   // ---- Pass 1: authoritative, stub-backed --------------------------------------
   {
     const dir = tmpDataDir();
@@ -253,6 +268,79 @@ async function main() {
     } finally {
       await app.close();
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // ---- Browser origin policy: REST CORS + WS upgrade share one allowlist -------------------
+  {
+    const dir = tmpDataDir();
+    process.env.CC_DATA_DIR = dir;
+    // Own ports: pass 1 just closed PORT, and undici's pool would replay a dead keep-alive.
+    const CORS_PORT = 8831, CORS_PORT2 = 8832;
+    const app = await startServer({
+      port: CORS_PORT, apiKey: TOKEN, host: 'test-host', epoch: 7,
+      createDB: createStubDB, createRestRouter: createStubRouter, log: () => {},
+      allowedOrigins: 'http://console.example', authFailMax: 3,
+    });
+    try {
+      const B = `http://127.0.0.1:${CORS_PORT}`;
+      const h = (r, n) => r.headers.get(n);
+      // preflight from an allowlisted origin is granted, with the Authorization header allowed
+      let r = await fetch(B + '/api/instances', { method: 'OPTIONS', headers: { origin: 'http://console.example', 'access-control-request-method': 'GET', 'access-control-request-headers': 'authorization' } });
+      assert.equal(r.status, 204, 'preflight answers 204');
+      assert.equal(h(r, 'access-control-allow-origin'), 'http://console.example', 'allowlisted origin is reflected');
+      assert.match(h(r, 'access-control-allow-headers') || '', /authorization/i, 'bearer header is allowed');
+      assert.equal(h(r, 'access-control-allow-methods'), 'GET,POST,OPTIONS', 'methods advertised = what the API serves');
+      assert.equal(h(r, 'access-control-allow-credentials'), null, 'no credentials flag: the bus has no cookies');
+      // localhost origins (a dev proxy, a local serve) are granted without configuration
+      r = await fetch(B + '/cc/whoami', { headers: { origin: 'http://localhost:8790' } });
+      assert.equal(h(r, 'access-control-allow-origin'), 'http://localhost:8790', 'localhost origin reflected');
+      // no grant → still Vary: Origin, so a shared cache never serves a grant-less body to an allowed origin
+      r = await fetch(B + '/cc/whoami');
+      assert.equal(h(r, 'access-control-allow-origin'), null, 'no Origin → no grant');
+      assert.match(h(r, 'vary') || '', /origin/i, 'Vary: Origin even without a grant');
+      // file:// (Origin: null) is NOT granted by default — any page can forge it from a sandboxed iframe
+      r = await fetch(B + '/cc/whoami', { headers: { origin: 'null' } });
+      assert.equal(h(r, 'access-control-allow-origin'), null, 'null origin denied by default');
+      r = await fetch(B + '/cc/whoami', { headers: { origin: 'http://evil.example' } });
+      assert.equal(h(r, 'access-control-allow-origin'), null, 'unknown origin gets no CORS grant');
+      // preflights never count as auth failures: a run of OPTIONS, then a bad token is a plain 401
+      for (let i = 0; i < 6; i++) await fetch(B + '/api/instances', { method: 'OPTIONS', headers: { origin: 'http://console.example', 'access-control-request-method': 'GET' } });
+      r = await fetch(B + '/api/instances', { headers: { origin: 'http://evil.example', authorization: 'Bearer nope' } });
+      assert.equal(r.status, 401, 'bad token after many preflights is 401, not 429 (preflights are not auth failures)');
+      // the WS upgrade applies the same origin policy
+      assert.equal(await upgrade(CORS_PORT, { token: TOKEN }), 101, 'no Origin (Node client) upgrades');
+      assert.equal(await upgrade(CORS_PORT, { token: TOKEN, origin: 'http://console.example' }), 101, 'allowlisted origin upgrades');
+      assert.equal(await upgrade(CORS_PORT, { token: TOKEN, origin: 'http://localhost:8790' }), 101, 'localhost origin upgrades');
+      assert.equal(await upgrade(CORS_PORT, { token: TOKEN, origin: 'http://evil.example' }), 403, 'unknown origin refused before auth');
+      assert.equal(await upgrade(CORS_PORT, { token: TOKEN, origin: 'null' }), 403, 'null origin refused by default');
+      // a bad ?token= on the upgrade trips the SAME per-IP limiter as REST (max 3; one REST miss above)
+      assert.equal(await upgrade(CORS_PORT, { token: 'bad' }), 401, 'bad WS token → 401');
+      assert.equal(await upgrade(CORS_PORT, { token: 'bad' }), 401, 'bad WS token → 401');
+      assert.equal(await upgrade(CORS_PORT, { token: 'bad' }), 429, 'over the limit → 429 on the upgrade path too');
+      console.log('server.test: PASS (origin policy: CORS + WS share it, file:// off by default, WS auth-fail limiter)');
+    } finally {
+      await app.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    // CC_ALLOW_FILE_ORIGIN=1 (opts.allowFileOrigin=true) grants the null origin on BOTH paths, nothing else
+    const dir2 = tmpDataDir();
+    process.env.CC_DATA_DIR = dir2;
+    const app2 = await startServer({
+      port: CORS_PORT2, apiKey: TOKEN, host: 'test-host', epoch: 7,
+      createDB: createStubDB, createRestRouter: createStubRouter, log: () => {},
+      allowFileOrigin: true,
+    });
+    try {
+      const B = `http://127.0.0.1:${CORS_PORT2}`;
+      const r = await fetch(B + '/cc/whoami', { headers: { origin: 'null' } });
+      assert.equal(r.headers.get('access-control-allow-origin'), 'null', 'null origin granted when opted in');
+      assert.equal(await upgrade(CORS_PORT2, { token: TOKEN, origin: 'null' }), 101, 'null origin upgrades when opted in');
+      assert.equal(await upgrade(CORS_PORT2, { token: TOKEN, origin: 'http://evil.example' }), 403, 'opt-in does not widen to other origins');
+      console.log('server.test: PASS (CC_ALLOW_FILE_ORIGIN=1 opt-in, REST + WS)');
+    } finally {
+      await app2.close();
+      fs.rmSync(dir2, { recursive: true, force: true });
     }
   }
 

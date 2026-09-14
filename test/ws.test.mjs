@@ -79,6 +79,20 @@ try {
   await send('general', 'AMBIENT_CHATTER between others', 'tester');
   await sleep(600);
   ok(frames.length === before, 'B: non-addressed ambient message is NOT pushed to alice');
+
+  // --- E: a firehose subscriber (the operator console, ?firehose=1) DOES get ambient traffic ---
+  const fh = []; let hello = null;
+  const cli2 = new WebSocket(`ws://127.0.0.1:${PORT}/cc/ws?identity=console&token=${TOKEN}&firehose=1`);
+  cli2.addEventListener('message', (ev) => { try { const f = JSON.parse(ev.data); if (f.type === 'hello') hello = f; if (f.type === 'msg') fh.push(f.message); } catch {} });
+  await new Promise((res, rej) => { cli2.addEventListener('open', res); cli2.addEventListener('error', rej); setTimeout(rej, 8000); });
+  await sleep(200);
+  ok(hello && hello.firehose === true, 'E: hello frame acknowledges firehose');
+  const b2 = frames.length;
+  await send('general', 'AMBIENT_FOR_FIREHOSE only the console should see this', 'tester');
+  await sleep(600);
+  ok(fh.some((m) => m.content.includes('AMBIENT_FOR_FIREHOSE')), 'E: firehose socket receives a non-addressed message');
+  ok(frames.length === b2, 'E: the plain (addressed-only) socket still does not');
+  try { cli2.close(); } catch {}
   try { cli.close(); } catch {}
 
   // --- C + D: the cc-ws bridge, exactly-once across a socket drop ---
@@ -120,5 +134,5 @@ try {
   try { srv && srv.kill(); } catch {}
 }
 if (failed) { console.error('❌ ws.test FAILED'); process.exit(1); }
-console.log('✅ ws.test: all assertions passed (addressed push <1s, ambient suppressed, exactly-once dedup + backfill)');
+console.log('✅ ws.test: all assertions passed (addressed push <1s, ambient suppressed, firehose opt-in, exactly-once dedup + backfill)');
 process.exit(0);

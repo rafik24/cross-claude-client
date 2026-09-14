@@ -172,6 +172,26 @@
   #mentions .mi small{margin-left:auto;color:var(--faint);font-family:var(--sans);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #mentions .mi.active{background:color-mix(in srgb,var(--accent) 18%,transparent)}
 
+  /* ---- stream toolbar filters, grouping, mention chips, new-messages pill ---------- */
+  .tb{gap:6px}
+  .fc{flex:none;height:22px;padding:0 8px;border:1px solid var(--line);border-radius:11px;background:transparent;font-size:12px;color:var(--quiet);display:inline-flex;align-items:center;gap:4px;white-space:nowrap;transition:background .15s,color .15s,border-color .15s}
+  .fc:hover{background:var(--muted);color:var(--fg)}
+  .fc.on{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:color-mix(in srgb,var(--accent) 50%,transparent);color:var(--fg)}
+  .fc .k{width:8px;height:8px;border-radius:2px;flex:none;background:var(--c,var(--quiet))}
+  .fc.x{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
+  #typefilters{display:inline-flex;gap:4px}
+  .tb .sp{flex:1}
+  .paused{flex:none;display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12px;color:var(--warn)}
+  .msg.cont .hd{display:none}
+  .msg.cont{padding-top:0}
+  .msg.cont .t{opacity:0} .msg.cont:hover .t{opacity:1}
+  .msg .from{cursor:pointer} .msg .from:hover{text-decoration:underline}
+  .at{font-family:var(--mono);font-size:12px;padding:0 4px;border-radius:3px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+  .at.me{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+  #newpill{position:absolute;left:50%;transform:translateX(-50%);bottom:92px;height:26px;padding:0 10px 0 8px;border-radius:13px;background:var(--accent);color:var(--on-accent);font-size:12px;font-weight:600;display:none;align-items:center;gap:6px;box-shadow:var(--shadow-lg);border:0;z-index:5}
+  #newpill.show{display:inline-flex}
+  @media (max-width:1100px){ #typefilters .fc .k + *{display:none} #typefilters .fc{padding:0 6px} }
+
   /* ---- work board ----------------------------------------------------------------- */
   .wb-head{padding:10px 8px 4px;flex:none}
   .wb-summary{padding:4px 12px 8px;display:grid;gap:6px;border-bottom:1px solid var(--line);flex:none}
@@ -228,6 +248,8 @@
   <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
   <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
   <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M19 12l-7 7-7-7"/></symbol>
   <symbol id="i-git" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
 </svg>
 
@@ -257,6 +279,8 @@
   <label title="Show every channel, including those outside the active window.">Show all channels <input id="showAllChans" type="checkbox" /></label>
   <label title="Show every participant, including those outside the active window.">Show all participants <input id="showAllParts" type="checkbox" /></label>
   <label title="Show the read-only work board panel on the right, grouped by epic.">Work board <input id="showBoard" type="checkbox" /></label>
+  <h3>Alerts</h3>
+  <label title="Desktop notification for a handoff or an @mention of you while this tab is not in front. The card shows the sender, the channel and the first 160 characters of the message on your OS notification surface; a burst (e.g. after a reconnect) is folded into one card.">Notify on handoff / @me <input id="notify" type="checkbox" /></label>
   <h3>Discovery</h3>
   <label title="Extra hosts to probe when following a moved leader (comma-separated host or host:port). The roster's own hosts are probed automatically, so this is usually only needed to seed discovery before the first connect.">Peer seeds <input id="peers" type="text" placeholder="host1, host2:8787" /></label>
   <div class="note">Roster hosts are probed automatically; seeds only matter before the first connect. The leader is followed by highest election epoch.</div>
@@ -277,8 +301,22 @@
 </aside>
 
 <div class="center">
-  <div class="tb"><span id="streamtitle">all channels</span><span class="hint">click a channel to filter</span></div>
+  <div class="tb"><span id="streamtitle">all channels</span>
+    <span id="typefilters" role="group" aria-label="Filter by message type">
+      <button class="fc on" data-t="">all</button>
+      <button class="fc t-handoff" data-t="handoff"><span class="k"></span><span>handoff</span></button>
+      <button class="fc t-request" data-t="request"><span class="k"></span><span>request</span></button>
+      <button class="fc t-response" data-t="response"><span class="k"></span><span>response</span></button>
+      <button class="fc t-done" data-t="done"><span class="k"></span><span>done</span></button>
+      <button class="fc t-status" data-t="status"><span class="k"></span><span>status</span></button>
+    </span>
+    <button class="fc" id="mefilter" title="Only messages that mention me" aria-pressed="false">@me</button>
+    <button class="fc x" id="senderfilter" hidden title="Click to clear the sender filter"></button>
+    <span class="sp"></span>
+    <span class="paused" id="paused" hidden><svg class="i s"><use href="#i-pause"/></svg>paused · scrolled up</span>
+  </div>
   <main id="stream"><div class="sys">Enter the bus token (CC_TOKEN from ~/.claude/.crosstalk) and click Connect. Messages stream here.</div></main>
+  <button id="newpill" type="button"><svg class="i s"><use href="#i-down"/></svg><span id="newcount">0</span>&nbsp;new · jump to latest</button>
   <footer>
     <div id="mentions" role="listbox" aria-label="Mention a session"></div>
     <div class="line">
@@ -291,7 +329,7 @@
       <label class="field fbody"><input id="body" placeholder="message… (Enter to send · @ to mention)" autocomplete="off" aria-label="message" /></label>
       <button id="send" disabled><svg class="i s"><use href="#i-send"/></svg>Send</button>
     </div>
-    <div class="keys"><span><kbd>Enter</kbd> send</span><span><kbd>@</kbd> mention · <kbd>↑</kbd><kbd>↓</kbd> pick · <kbd>Tab</kbd> accept</span><span><kbd>Esc</kbd> close</span></div>
+    <div class="keys"><span><kbd>Enter</kbd> send</span><span><kbd>@</kbd> mention · <kbd>↑</kbd><kbd>↓</kbd> pick · <kbd>Tab</kbd> accept</span><span><kbd>Esc</kbd> close · clear filters</span></div>
   </footer>
 </div>
 
@@ -323,6 +361,7 @@
   $('peers').value = cfg.peers || '';
   // Work board is ON by default — the PO watches the board next to the chat. Persisted per-browser.
   $('showBoard').checked = cfg.boardOn ?? true;
+  $('notify').checked = !!cfg.notify;
   document.body.classList.toggle('board-on', $('showBoard').checked);
 
   let cursors = {};          // per-channel last_id seen (for message fetch)
@@ -337,6 +376,10 @@
   let firstChannels = true;  // don't flag everything as "new" on first load
   let ok = false, timer = null, hbTimer = null, pollFails = 0;
   let leaderRev = null;      // running-code rev of the current bus leader (from /cc/whoami)
+  let ws = null, wsOpen = false, wsFirehose = false, wsTimer = null, wsBackoff = 2000, needBackfill = true; // push transport
+  let pollN = 0;             // poll counter: with push up, the per-channel REST sweep runs every 4th tick
+  let typeFilter = null, senderFilter = null, meOnly = false;                            // stream filters
+  let unseen = 0;            // messages appended while the operator is scrolled up
 
   const pad = (n) => String(n).padStart(2, '0');
   const tms = (s) => { const d = Date.parse((s || '').replace(' ', 'T') + 'Z'); return isNaN(d) ? 0 : d; };
@@ -349,7 +392,7 @@
   const partWin = () => Math.max(1, Number($('partWin').value) || 15) * 60000;
   const showAllParts = () => $('showAllParts').checked;
   const showAllChans = () => $('showAllChans').checked;
-  const save = () => localStorage.setItem(LS, JSON.stringify({ base: $('base').value.trim(), token: $('token').value, me: $('me').value.trim(), chanWin: Number($('chanWin').value)||15, partWin: Number($('partWin').value)||15, showAllParts: showAllParts(), showAllChans: showAllChans(), peers: $('peers').value.trim(), boardOn: $('showBoard').checked }));
+  const save = () => localStorage.setItem(LS, JSON.stringify({ base: $('base').value.trim(), token: $('token').value, me: $('me').value.trim(), chanWin: Number($('chanWin').value)||15, partWin: Number($('partWin').value)||15, showAllParts: showAllParts(), showAllChans: showAllChans(), peers: $('peers').value.trim(), boardOn: $('showBoard').checked, notify: $('notify').checked }));
   const saveViewed = () => localStorage.setItem(LS + '.viewed', JSON.stringify(viewedAt));
   const base = () => $('base').value.trim().replace(/\/$/, '');
   const hdr = () => ({ 'Authorization': 'Bearer ' + $('token').value.trim() });
@@ -365,7 +408,7 @@
   const expandPeer = (p) => { p = (p || '').trim(); if (!p) return null; if (/^https?:\/\//.test(p)) return p.replace(/\/$/, ''); return 'http://' + (p.includes(':') ? p : p + ':' + DEFAULT_PORT); };
   const peerList = () => ($('peers').value || '').split(',').map((s) => s.trim()).filter(Boolean);
   const readLeaderCache = () => { try { return JSON.parse(localStorage.getItem(LS + '.leader') || 'null'); } catch { return null; } };
-  // host of an instance_id is the part before '/', e.g. "raf-ms-7e59/linux-…" → "raf-ms-7e59"
+  // host of an instance_id is the part before '/', e.g. "build-vm/linux-…" → "build-vm"
   const hostBases = () => [...new Set(instances.map((i) => (i.instance_id || '').split('/')[0]).filter(Boolean))].map((h) => 'http://' + h + ':' + DEFAULT_PORT);
   async function whoami(b, ms = 1500) {
     b = b.replace(/\/$/, '');
@@ -414,27 +457,106 @@
   let toastTimer = null;
   function toast(text) { const t = $('toast'); t.textContent = text; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 6000); }
 
-  function addMsg(m) {
+  // @mention chips. Runs on ALREADY-ESCAPED html; the id charset is the same one the composer's
+  // autocomplete accepts, so the match can never span a tag or an entity.
+  const BROADCAST = new Set(['all', 'here', 'everyone']);
+  const linkMentions = (html) => html.replace(/@([A-Za-z0-9._\/-]+)/g, (whole, id) =>
+    `<span class="at${(id === me() || BROADCAST.has(id)) ? ' me' : ''}">${whole}</span>`);
+  const GROUP_MS = 5 * 60000; // consecutive messages from one sender in one channel within this gap share a header
+  const isVisible = (el) => el.style.display !== 'none';
+  const sameThread = (a, b) => a && b && a.sender === b.sender && a.channel === b.channel;
+  const prevVisibleRow = (el) => { let p = el.previousElementSibling; while (p && !(p._m && isVisible(p))) p = p.previousElementSibling; return p; };
+  const continues = (pv, el) => !!(pv && sameThread(pv._m, el._m) && (tms(el._m.created_at) - tms(pv._m.created_at)) < GROUP_MS);
+  // 'cont' = shares a header with the previous VISIBLE row of the same sender+channel thread.
+  const regroupRow = (el) => el.classList.toggle('cont', continues(prevVisibleRow(el), el));
+  function addMsg(m, { live = false } = {}) {
     if (seenIds.has(m.id)) return; seenIds.add(m.id);
     msgLog.push(m);
-    // Always render into the DOM — the channel filter is a display toggle, never a drop.
+    // Always render into the DOM — every filter is a display toggle, never a drop.
     // (Dropping here permanently loses messages that arrive while another channel is selected,
     //  because the poll cursor + seenIds have already consumed them and won't re-fetch.)
     const el = document.createElement('div');
     const toMe = (m.content || '').includes('@' + me());
     el.className = 'msg' + (m.sender === me() ? ' mine' : '') + (m.message_type === 'handoff' ? ' handoff' : '') + (toMe ? ' tome' : '');
-    el.dataset.ch = m.channel;
+    el.dataset.ch = m.channel; el.dataset.type = m.message_type || ''; el.dataset.sender = m.sender || ''; el.dataset.tome = toMe ? '1' : '';
+    el._m = m;
     el.innerHTML =
       `<span class="t" title="${esc(m.created_at || '')} UTC">${hhmm(m.created_at)}</span>` +
-      `<div class="hd"><span class="from">${esc(m.sender)}</span>` +
+      `<div class="hd"><span class="from" title="Click to filter by this sender">${esc(m.sender)}</span>` +
       `<span class="tag t-${esc(m.message_type)}">${esc(m.message_type)}</span>` +
       `<span class="ch">#${esc(m.channel)}</span></div>` +
-      `<div class="body">${esc(m.content)}</div>`;
-    const hidden = filter && m.channel !== filter;
+      `<div class="body">${linkMentions(esc(m.content))}</div>`;
+    const hidden = !passesFilters(el);
     el.style.display = hidden ? 'none' : '';
-    const atBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
-    stream.appendChild(el);
-    if (!hidden && atBottom) stream.scrollTop = stream.scrollHeight;
+    const atBottom = atBottomNow();
+    // Insert in id order: a pushed message lands before the sweep brings older ones from the
+    // same channel, and a row must never sit above a message that preceded it.
+    let ref = null;
+    for (let x = stream.lastElementChild; x && x._m; x = x.previousElementSibling) { if (x._m.id < m.id) break; ref = x; }
+    stream.insertBefore(el, ref);
+    if (ref) applyFilters();                 // out-of-order: regroup the rows around it (rare)
+    else if (!hidden) regroupRow(el);
+    if (!hidden) { if (atBottom) stream.scrollTop = stream.scrollHeight; else { unseen++; showPill(); } }
+    if (live && m.sender !== me() && (m.message_type === 'handoff' || toMe)) notifyOS(m);
+  }
+
+  // ---- stream filters (channel · type · sender · @me) — display-only, applied to every row --------
+  function passesFilters(el) {
+    const d = el.dataset;
+    if (filter && d.ch !== filter) return false;
+    if (typeFilter && d.type !== typeFilter) return false;
+    if (senderFilter && d.sender !== senderFilter) return false;
+    if (meOnly && !d.tome) return false;
+    return true;
+  }
+  function applyFilters() {
+    let pv = null;
+    for (const el of stream.children) {
+      if (!el._m) continue;   // .sys rows
+      const vis = passesFilters(el);
+      el.style.display = vis ? '' : 'none';
+      if (!vis) continue;
+      el.classList.toggle('cont', continues(pv, el));
+      pv = el;
+    }
+    $('streamtitle').textContent = filter ? '#' + filter : 'all channels';
+    [...$('typefilters').querySelectorAll('.fc')].forEach((b) => b.classList.toggle('on', (b.dataset.t || null) === typeFilter));
+    $('mefilter').classList.toggle('on', meOnly); $('mefilter').setAttribute('aria-pressed', String(meOnly));
+    $('senderfilter').hidden = !senderFilter;
+    $('senderfilter').textContent = senderFilter ? 'from ' + shortOf(senderFilter) + ' ×' : '';
+  }
+  function clearFilters() { typeFilter = null; senderFilter = null; meOnly = false; applyFilters(); }
+
+  // ---- "N new · jump to latest": never yank the operator's scroll position --------------------------
+  const atBottomNow = () => stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
+  function showPill() { $('newcount').textContent = unseen; $('newpill').classList.add('show'); $('paused').hidden = false; }
+  function hidePill() { unseen = 0; $('newpill').classList.remove('show'); $('paused').hidden = true; }
+
+  // ---- desktop notification for a handoff or an @mention while the tab is not in front ------------
+  // A reconnect backfill can deliver a whole outage's worth at once: coalesce anything that
+  // arrives within 700 ms into one card instead of one per message.
+  let notifQ = [], notifTimer = null;
+  function notifyOS(m) {
+    if (!$('notify').checked || !('Notification' in window) || Notification.permission !== 'granted') return;
+    if (document.visibilityState === 'visible' && document.hasFocus()) return;
+    notifQ.push(m);
+    if (!notifTimer) notifTimer = setTimeout(flushNotifs, 700);
+  }
+  function flushNotifs() {
+    notifTimer = null; const q = notifQ; notifQ = [];
+    if (!q.length) return;
+    try {
+      let n;
+      if (q.length === 1) {
+        const m = q[0];
+        n = new Notification(`${shortOf(m.sender)} · #${m.channel}${m.message_type === 'handoff' ? ' · handoff' : ''}`, { body: (m.content || '').slice(0, 160), tag: 'cc-' + m.id });
+      } else {
+        const hand = q.filter((m) => m.message_type === 'handoff').length;
+        const who = [...new Set(q.map((m) => shortOf(m.sender)))].join(', ');
+        n = new Notification(`${q.length} new for you${hand ? ` · ${hand} handoff${hand > 1 ? 's' : ''}` : ''}`, { body: 'from ' + who, tag: 'cc-batch' });
+      }
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch {}
   }
 
   // An ownership handoff is "unacked" until someone OTHER than the sender posts a `response`
@@ -509,9 +631,8 @@
     }
     [...chansEl.querySelectorAll('.chan')].forEach((el) => el.onclick = () => {
       filter = el.dataset.ch || null;
-      $('streamtitle').textContent = filter ? '#' + filter : 'all channels';
       if (filter) { const c = channels.find((x) => x.name === filter); if (c) { viewedAt[filter] = tms(c.last_message_at); saveViewed(); } }
-      [...stream.children].forEach((m) => { if (m.dataset) m.style.display = (!filter || m.dataset.ch === filter) ? '' : 'none'; });
+      applyFilters();
       renderChannels(channels);
     });
     $('wininfo').textContent = `${show.length}/${rows.length} channels shown`;
@@ -643,11 +764,22 @@
     try {
       const [{ instances: inst }, { channels }] = await Promise.all([api('/api/instances'), api('/api/channels')]);
       renderRoster(inst);
-      for (const c of channels) {
-        const cur = cursors[c.name] || 0;
-        const { messages, last_id } = await api(`/api/messages/${encodeURIComponent(c.name)}?after_id=${cur}`);
-        if (last_id) cursors[c.name] = Math.max(cur, last_id);
-        messages.sort((a,b)=>a.id-b.id).forEach(addMsg);
+      // Message sweep. With a firehose socket up it runs every 10th tick (15 s) as the
+      // exactly-once backstop, and right after a (re)connect to backfill anything missed while
+      // the socket was down. With no socket — or an older leader that only pushes addressed
+      // traffic — it runs every tick, exactly as before. Push never advances the cursors, so the
+      // sweep re-fetches what the socket delivered and seenIds drops the duplicates.
+      pollN++;
+      const sweep = !wsOpen || !wsFirehose || needBackfill || pollN % 10 === 0;
+      if (sweep) {
+        needBackfill = false;
+        const live = !firstChannels;   // history on the first load is not "new"
+        for (const c of channels) {
+          const cur = cursors[c.name] || 0;
+          const { messages, last_id } = await api(`/api/messages/${encodeURIComponent(c.name)}?after_id=${cur}`);
+          if (last_id) cursors[c.name] = Math.max(cur, last_id);
+          messages.sort((a,b)=>a.id-b.id).forEach((m) => addMsg(m, { live }));
+        }
       }
       // on the very first channels load, treat current state as "seen" so nothing false-flags as new
       if (firstChannels) { channels.forEach((c) => { if (!(c.name in viewedAt)) viewedAt[c.name] = tms(c.last_message_at); }); saveViewed(); }
@@ -657,7 +789,7 @@
       renderBanner();
       firstChannels = false;
       pollFails = 0;
-      setOK(true, `live · ${channels.length} ch`);
+      setOK(true, `live · ${wsOpen && wsFirehose ? 'push' : 'poll'} · ${channels.length} ch`);
       pollWork(); // read-only work board — self-contained, quiet on error
     } catch (e) {
       pollFails++;
@@ -667,11 +799,51 @@
         const found = await discoverLeader();
         if (found && found.base !== base()) {
           setOK(false, 'leader moved → following ' + found.host); toast('Leader moved to ' + found.host + ' — resumed');
-          pointAt(found.base); pollFails = 0; poll(); return;
+          pointAt(found.base); pollFails = 0; connectWs(); poll(); return;
         }
       }
       setOK(false, String(e.message || e));
     }
+  }
+
+  // ---- WebSocket push -----------------------------------------------------------------------
+  // Same socket the Node clients use (GET /cc/ws). A browser cannot set handshake headers, so the
+  // token rides in the query — the hub accepts ?token= for exactly this case and never logs URLs.
+  // Frames: {type:'msg', message} → addMsg (seenIds dedupes against the REST sweep). Anything else
+  // is ignored. On close we back off (2 s → 30 s) and reconnect; every (re)open flags a backfill.
+  // ?firehose=1 asks the hub for every message (lanes get only what is addressed to them). An
+  // older leader ignores it and pushes addressed traffic only; the hello frame tells us which.
+  const wsUrl = () => { const b = base(); return b ? b.replace(/^http/, 'ws') + '/cc/ws?identity=' + encodeURIComponent(me()) + '&token=' + encodeURIComponent($('token').value.trim()) + '&firehose=1' : null; };
+  function closeWs() {
+    if (wsTimer) { clearTimeout(wsTimer); wsTimer = null; }
+    if (ws) { const s = ws; ws = null; try { s.onclose = null; s.onmessage = null; s.close(); } catch {} }
+    wsOpen = false;
+  }
+  function connectWs() {
+    closeWs();
+    const u = wsUrl(); if (!u || !('WebSocket' in window)) return;
+    let sock; try { sock = new WebSocket(u); } catch { return; }
+    ws = sock;
+    sock.onopen = () => { if (ws !== sock) return; wsOpen = true; wsBackoff = 2000; needBackfill = true; };
+    sock.onmessage = (ev) => {
+      if (ws !== sock) return;
+      let frame; try { frame = JSON.parse(ev.data); } catch { return; }
+      if (frame && frame.type === 'hello') {
+        wsFirehose = !!frame.firehose;   // only a firehose socket makes the stream genuinely "push"
+        if (ok) setOK(true, $('meta').textContent.replace(/^live · (push|poll)/, 'live · ' + (wsFirehose ? 'push' : 'poll')));
+        return;
+      }
+      if (!frame || frame.type !== 'msg' || !frame.message) return;
+      addMsg(frame.message, { live: true });
+      renderBanner();
+    };
+    sock.onclose = () => {
+      if (ws !== sock) return;
+      ws = null; wsOpen = false; wsFirehose = false;
+      if (ok) setOK(true, $('meta').textContent.replace(/^live · (push|poll)/, 'live · poll'));
+      wsTimer = setTimeout(connectWs, wsBackoff); wsBackoff = Math.min(wsBackoff * 2, 30000);
+    };
+    sock.onerror = () => {};
   }
 
   // Register the console in presence so it shows online. Heartbeat well under the server's
@@ -681,6 +853,7 @@
   }
   async function start() {
     save(); seenIds = new Set(); cursors = {}; msgLog = []; firstChannels = true; stream.innerHTML = ''; pollFails = 0;
+    closeWs(); hidePill(); pollN = 0; needBackfill = true;
     workItems = new Map(); workCursor = null; workPollN = 0; $('wboard').innerHTML = '<div class="empty">—</div>'; $('wbsummary').textContent = ''; $('wbmeta').textContent = '';
     if (timer) clearInterval(timer);
     if (hbTimer) clearInterval(hbTimer);
@@ -688,6 +861,7 @@
     // cached/peer node may be at a higher epoch after a migration — follow whoever leads now.
     try { const found = await discoverLeader(); if (found) pointAt(found.base); } catch {}
     registerSelf(); hbTimer = setInterval(registerSelf, 45000);
+    connectWs();
     poll(); timer = setInterval(poll, 1500);
   }
 
@@ -762,6 +936,26 @@
     if ($('showBoard').checked && ok) pollWork(); // populate immediately on show
   });
   $('peers').addEventListener('change', save);
+  // ---- stream toolbar, sender filter, new-messages pill, keyboard --------------------------------
+  $('typefilters').addEventListener('click', (e) => { const b = e.target.closest('.fc'); if (!b) return; typeFilter = b.dataset.t || null; applyFilters(); });
+  $('mefilter').onclick = () => { meOnly = !meOnly; applyFilters(); };
+  $('senderfilter').onclick = () => { senderFilter = null; applyFilters(); };
+  stream.addEventListener('click', (e) => {
+    const f = e.target.closest('.from'); if (!f) return;
+    const row = f.closest('.msg'); if (!row) return;
+    senderFilter = senderFilter === row.dataset.sender ? null : row.dataset.sender; applyFilters();
+  });
+  $('newpill').onclick = () => { stream.scrollTop = stream.scrollHeight; hidePill(); };
+  stream.addEventListener('scroll', () => { if (atBottomNow()) hidePill(); else if (!unseen) $('paused').hidden = false; });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.target.closest('input,select,textarea')) return;
+    if (typeFilter || senderFilter || meOnly) clearFilters();
+  });
+  $('notify').addEventListener('change', () => {
+    save();
+    if ($('notify').checked && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+  });
+
   // ---- chrome: settings popover, status chip, board button, theme (display-only) -------------
   $('gear').onclick = () => { const s = $('settings'); s.hidden = !s.hidden; $('gear').classList.toggle('on', !s.hidden); };
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('settings').hidden) { $('settings').hidden = true; $('gear').classList.remove('on'); } });

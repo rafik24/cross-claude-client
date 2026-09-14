@@ -16,8 +16,10 @@ read-only everywhere except the composer. Redesign it, then give the operator co
 - It is a **single self-contained HTML file**: inline `<style>` + inline vanilla-JS `<script>`, **zero external
   dependencies, no build step, no framework, no CDN, no web fonts**. It must keep working fully **offline**
   (the fleet has no guaranteed internet) and be served as-is. Do **not** add npm/bundlers/React/Tailwind-CDN.
-- It is served two ways that must both keep working: opened directly as a `file://`, and served by the bus
-  leader at `http://<leader>:8787/console`.
+- It is served two ways that must both keep working: served by the bus leader at
+  `http://<leader>:8787/console` (the launcher's path; same-origin, needs nothing), and opened directly as a
+  `file://` page — which needs `CC_ALLOW_FILE_ORIGIN=1` on the leader, because the `null` origin a file page
+  sends is off by default (any web page can forge it from a sandboxed iframe).
 - Small **server changes are allowed** when a console feature needs them (e.g. the WS hub's origin allowlist
   for `file://` origins), provided they are covered by tests in `test/` and reviewed by the
   `crosstalk-reviewer` agent before merge.
