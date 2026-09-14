@@ -62,6 +62,9 @@ const factory = new Function(
 const c = factory(document, localStorage, location, window, noop, noop, noop, noop, () => Promise.reject(new Error('offline')), class { constructor() { this.signal = {}; } abort() {} });
 
 const PROBE = '<img src=x onerror=alert(1)>"\'</span><script>x</script>';
+// Fixture timestamps must be 'now': the roster and channel lists hide anything outside the 15-minute
+// active window, so a fixed date would pass only until the clock moved past it.
+const NOW = new Date().toISOString().replace('T', ' ').slice(0, 19);
 const escapedOnly = (out, where) => {
   assert.ok(out.length > 0, where + ' emitted something');
   assert.ok(!out.includes('<img'), where + ' must not emit a raw <img');
@@ -117,7 +120,7 @@ const escapedOnly = (out, where) => {
   // status must be 'online' or the active-window filter (correctly) hides the row before anything renders
   c.renderRoster([{ instance_id: PROBE + '/' + PROBE, status: 'online', last_seen: PROBE, description: PROBE, rev: PROBE }]);
   escapedOnly(c.$('roster').innerHTML, 'renderRoster');
-  c.renderChannels([{ name: PROBE, last_message_at: '2026-09-14 10:00:00', message_count: 3 }]);
+  c.renderChannels([{ name: PROBE, last_message_at: NOW, message_count: 3 }]);
   escapedOnly(c.$('channels').innerHTML, 'renderChannels');
   const dl = c.$('chanlist').innerHTML;
   assert.ok(dl.includes('<option value="') && !dl.includes('<img') && dl.includes('&lt;img'), 'composer datalist options are escaped too');
@@ -137,7 +140,7 @@ const escapedOnly = (out, where) => {
 // ---- mention autocomplete ------------------------------------------------------------------------
 {
   c.$('body').value = '@x'; c.$('body').selectionStart = 2;
-  c.renderRoster([{ instance_id: 'host/' + PROBE, status: 'online', last_seen: '2026-09-14 10:00:00' }, { instance_id: 'host/xylo', status: 'online', last_seen: '2026-09-14 10:00:00' }]);
+  c.renderRoster([{ instance_id: 'host/' + PROBE, status: 'online', last_seen: NOW }, { instance_id: 'host/xylo', status: 'online', last_seen: NOW }]);
   c.openMentions();
   const out = c.$('mentions').innerHTML;
   assert.ok(out.includes('xylo'), 'matching peer is offered');

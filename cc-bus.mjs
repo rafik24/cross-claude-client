@@ -90,6 +90,10 @@ const _bootCfg = loadConfig();
 const ADMIN_KEY = process.env.CC_ADMIN_KEY || _bootCfg.admin || '';
 // Interface the spawned server binds. From env or the config file; empty ⇒ server default (loopback).
 const BIND = process.env.CC_BIND || _bootCfg.bind || '';
+// file:// console grant for the spawned server (see server.mjs allowFileOrigin). From env or the
+// config file; only '1' enables it.
+const ALLOW_FILE_ORIGIN = process.env.CC_ALLOW_FILE_ORIGIN || _bootCfg.allowFileOrigin || '';
+if (ALLOW_FILE_ORIGIN && ALLOW_FILE_ORIGIN !== '1') console.warn(`[cc-bus] CC_ALLOW_FILE_ORIGIN=${ALLOW_FILE_ORIGIN} is not '1' — the server treats it as OFF (file:// consoles stay blocked)`);
 // Cap the /cc/import body so a runaway/abusive upload can't accumulate unboundedly in memory.
 const MAX_IMPORT_BYTES = (parseInt(process.env.CC_MAX_IMPORT_MB) || 256) * 1024 * 1024;
 
@@ -151,6 +155,9 @@ function spawnLeader(epoch, port, token) {
       // supervisor) serves off-box instead of silently binding loopback. Only set it when non-empty
       // so an unset value leaves the server's own loopback default intact.
       ...(BIND ? { CC_BIND: BIND } : {}),
+      // And the file:// console grant, so `CC_ALLOW_FILE_ORIGIN=1` in ~/.claude/.crosstalk survives a
+      // supervisor started by the join hook's `ensure` (which carries no env of its own).
+      ...(ALLOW_FILE_ORIGIN ? { CC_ALLOW_FILE_ORIGIN: ALLOW_FILE_ORIGIN } : {}),
     },
     stdio: 'inherit',
     // Never pop a console window on Windows when a console-less/detached supervisor spawns the

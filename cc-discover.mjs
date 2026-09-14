@@ -6,7 +6,7 @@
 // election epoch (tiebreak: lexicographically lowest host id). Works LAN-only
 // (UDP broadcast beacon, no Tailscale needed), tailnet-only (peer scan), or mixed.
 //
-//   loadConfig()                      → { token, pin, peers[], port, beaconPort }
+//   loadConfig()                      → { token, admin, bind, allowFileOrigin, pin, peers[], port, beaconPort }
 //   resolveFast({token,pin})          → {base,host,epoch} | null   (pin→cache→loopback; hot path)
 //   resolveFull({token,pin,skipSelf}) → {base,host,epoch} | null   (full merged scan; election/migrate)
 //   cacheLeader(leader) / readCache()
@@ -50,13 +50,17 @@ export function loadConfig() {
   // not just env — else a host (or a supervisor that gets promoted) silently binds loopback and is
   // unreachable off-box. Empty ⇒ the server's own default (loopback, per refuse-run-open). Env wins.
   const bind = process.env.CC_BIND || out.CC_BIND || '';
+  // Whether a console opened as a file:// page may talk to this node's server (CORS + WS grant for
+  // the `null` origin). Off unless '1'. Read from the config too, for the same reason as CC_BIND: the
+  // supervisor forwards it to the server it spawns, whatever launched the supervisor. Env wins.
+  const allowFileOrigin = process.env.CC_ALLOW_FILE_ORIGIN || out.CC_ALLOW_FILE_ORIGIN || '';
   // CC_BASE is a manual PIN/override (back-compat). New configs omit it and rely on discovery.
   const pin = (process.env.CC_BASE || out.CC_BASE || '').replace(/\/$/, '') || null;
   const port = parseInt(process.env.CC_PORT || out.CC_PORT) || DEFAULT_PORT;
   const beaconPort = parseInt(process.env.CC_BEACON_PORT || out.CC_BEACON_PORT) || DEFAULT_BEACON_PORT;
   const peers = (process.env.CC_PEERS || out.CC_PEERS || '')
     .split(',').map((s) => s.trim()).filter(Boolean);
-  return { token, admin, bind, pin, port, beaconPort, peers };
+  return { token, admin, bind, allowFileOrigin, pin, port, beaconPort, peers };
 }
 
 // --- cache ---
