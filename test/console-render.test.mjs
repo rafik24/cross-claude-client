@@ -28,6 +28,12 @@ function makeEl(tag = 'div') {
       contains(c) { return this._set.has(c); },
     },
     appendChild(child) { child.previousElementSibling = el.children[el.children.length - 1] || null; el.children.push(child); return child; },
+    insertBefore(child, ref) {
+      if (!ref) return el.appendChild(child);
+      const i = el.children.indexOf(ref); el.children.splice(i, 0, child);
+      child.previousElementSibling = el.children[i - 1] || null; ref.previousElementSibling = child; return child;
+    },
+    get lastElementChild() { return el.children[el.children.length - 1] || null; },
     querySelectorAll() { return []; }, querySelector() { return null; }, closest() { return null; },
     addEventListener(t, fn) { (el._listeners[t] ||= []).push(fn); }, removeEventListener() {},
     setAttribute(k, v) { el['@' + k] = String(v); }, getAttribute(k) { return el['@' + k] ?? null; },
@@ -81,6 +87,21 @@ const escapedOnly = (out, where) => {
   assert.ok(m.includes('<span class="at me">@all</span>'), 'broadcast keyword is highlighted');
   assert.ok(!m.includes('<b>'), 'markup inside a mention stays escaped');
   assert.ok(m.includes('&lt;b&gt;'), 'escaped form is what reaches the DOM');
+  // mention boundaries: an entity or a quote right after the id can neither join the chip nor break out
+  c.addMsg({ id: 4, channel: 'general', sender: 'peer', message_type: 'message', content: `@po-console' and @a&b and "@me&#39;`, created_at: '2026-09-14 10:00:02' });
+  const b = stream.children[stream.children.length - 1].innerHTML;
+  assert.ok(b.includes('<span class="at me">@po-console</span>&#39;'), 'quote after a mention stays outside the chip, escaped');
+  assert.ok(b.includes('<span class="at">@a</span>&amp;b'), 'entity after a mention stays outside the chip');
+  assert.ok(b.includes('&quot;<span class="at">@me</span>&amp;#39;'), 'a literal &#39; in content survives as text, not as a quote');
+  assert.ok(!/<span class="at[^"]*">[^<]*&/.test(b), 'no chip ever contains an ampersand');
+  // id-ordered insertion + grouping: a pushed newer id, then the sweep brings the older one
+  c.addMsg({ id: 10, channel: 'ops', sender: 'lane', message_type: 'status', content: 'second', created_at: '2026-09-14 11:00:05' });
+  c.addMsg({ id: 9, channel: 'ops', sender: 'lane', message_type: 'status', content: 'first', created_at: '2026-09-14 11:00:00' });
+  const ids = stream.children.map((r) => r._m.id);
+  assert.deepEqual(ids.slice(-2), [9, 10], 'rows are kept in id order even when pushed out of order');
+  const last = stream.children[stream.children.length - 1];
+  assert.ok(last.classList.contains('cont'), 'the later row of one sender+channel thread shares the header');
+  assert.ok(!stream.children[stream.children.length - 2].classList.contains('cont'), 'the earlier row keeps its header');
 }
 
 // ---- unacked-handoff strip ----------------------------------------------------------------------
@@ -98,6 +119,8 @@ const escapedOnly = (out, where) => {
   escapedOnly(c.$('roster').innerHTML, 'renderRoster');
   c.renderChannels([{ name: PROBE, last_message_at: '2026-09-14 10:00:00', message_count: 3 }]);
   escapedOnly(c.$('channels').innerHTML, 'renderChannels');
+  const dl = c.$('chanlist').innerHTML;
+  assert.ok(dl.includes('<option value="') && !dl.includes('<img') && dl.includes('&lt;img'), 'composer datalist options are escaped too');
 }
 
 // ---- work board -------------------------------------------------------------------------------
@@ -118,7 +141,8 @@ const escapedOnly = (out, where) => {
   c.openMentions();
   const out = c.$('mentions').innerHTML;
   assert.ok(out.includes('xylo'), 'matching peer is offered');
+  assert.ok(out.includes('&lt;img'), 'the probe peer is offered in escaped form (it matches on the x in src=x)');
   assert.ok(!out.includes('<img'), 'openMentions never emits a raw <img');
 }
 
-console.log('✅ console-render.test: all assertions passed (escaping in every render path, exactly-once, mention chips, fallback glyph)');
+console.log('✅ console-render.test: all assertions passed (escaping in every render path incl. datalist, exactly-once, mention-chip boundaries, id-ordered insertion + grouping, fallback glyph)');

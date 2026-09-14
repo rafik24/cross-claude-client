@@ -182,9 +182,9 @@
   #typefilters{display:inline-flex;gap:4px}
   .tb .sp{flex:1}
   .paused{flex:none;display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12px;color:var(--warn)}
-  .msg.cont:not(.solo) .hd{display:none}
-  .msg.cont:not(.solo){padding-top:0}
-  .msg.cont:not(.solo) .t{opacity:0} .msg.cont:not(.solo):hover .t{opacity:1}
+  .msg.cont .hd{display:none}
+  .msg.cont{padding-top:0}
+  .msg.cont .t{opacity:0} .msg.cont:hover .t{opacity:1}
   .msg .from{cursor:pointer} .msg .from:hover{text-decoration:underline}
   .at{font-family:var(--mono);font-size:12px;padding:0 4px;border-radius:3px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
   .at.me{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
@@ -280,7 +280,7 @@
   <label title="Show every participant, including those outside the active window.">Show all participants <input id="showAllParts" type="checkbox" /></label>
   <label title="Show the read-only work board panel on the right, grouped by epic.">Work board <input id="showBoard" type="checkbox" /></label>
   <h3>Alerts</h3>
-  <label title="Desktop notification for a handoff or an @mention of you while this tab is not in front. Uses the browser's Notification permission.">Notify on handoff / @me <input id="notify" type="checkbox" /></label>
+  <label title="Desktop notification for a handoff or an @mention of you while this tab is not in front. The card shows the sender, the channel and the first 160 characters of the message on your OS notification surface; a burst (e.g. after a reconnect) is folded into one card.">Notify on handoff / @me <input id="notify" type="checkbox" /></label>
   <h3>Discovery</h3>
   <label title="Extra hosts to probe when following a moved leader (comma-separated host or host:port). The roster's own hosts are probed automatically, so this is usually only needed to seed discovery before the first connect.">Peer seeds <input id="peers" type="text" placeholder="host1, host2:8787" /></label>
   <div class="note">Roster hosts are probed automatically; seeds only matter before the first connect. The leader is followed by highest election epoch.</div>
@@ -376,11 +376,10 @@
   let firstChannels = true;  // don't flag everything as "new" on first load
   let ok = false, timer = null, hbTimer = null, pollFails = 0;
   let leaderRev = null;      // running-code rev of the current bus leader (from /cc/whoami)
-  let ws = null, wsOpen = false, wsTimer = null, wsBackoff = 2000, needBackfill = true; // push transport
+  let ws = null, wsOpen = false, wsFirehose = false, wsTimer = null, wsBackoff = 2000, needBackfill = true; // push transport
   let pollN = 0;             // poll counter: with push up, the per-channel REST sweep runs every 4th tick
   let typeFilter = null, senderFilter = null, meOnly = false;                            // stream filters
   let unseen = 0;            // messages appended while the operator is scrolled up
-  let lastEl = null;         // last appended message row (consecutive-sender grouping)
 
   const pad = (n) => String(n).padStart(2, '0');
   const tms = (s) => { const d = Date.parse((s || '').replace(' ', 'T') + 'Z'); return isNaN(d) ? 0 : d; };
@@ -409,7 +408,7 @@
   const expandPeer = (p) => { p = (p || '').trim(); if (!p) return null; if (/^https?:\/\//.test(p)) return p.replace(/\/$/, ''); return 'http://' + (p.includes(':') ? p : p + ':' + DEFAULT_PORT); };
   const peerList = () => ($('peers').value || '').split(',').map((s) => s.trim()).filter(Boolean);
   const readLeaderCache = () => { try { return JSON.parse(localStorage.getItem(LS + '.leader') || 'null'); } catch { return null; } };
-  // host of an instance_id is the part before '/', e.g. "raf-ms-7e59/linux-…" → "raf-ms-7e59"
+  // host of an instance_id is the part before '/', e.g. "build-vm/linux-…" → "build-vm"
   const hostBases = () => [...new Set(instances.map((i) => (i.instance_id || '').split('/')[0]).filter(Boolean))].map((h) => 'http://' + h + ':' + DEFAULT_PORT);
   async function whoami(b, ms = 1500) {
     b = b.replace(/\/$/, '');
@@ -466,6 +465,10 @@
   const GROUP_MS = 5 * 60000; // consecutive messages from one sender in one channel within this gap share a header
   const isVisible = (el) => el.style.display !== 'none';
   const sameThread = (a, b) => a && b && a.sender === b.sender && a.channel === b.channel;
+  const prevVisibleRow = (el) => { let p = el.previousElementSibling; while (p && !(p._m && isVisible(p))) p = p.previousElementSibling; return p; };
+  const continues = (pv, el) => !!(pv && sameThread(pv._m, el._m) && (tms(el._m.created_at) - tms(pv._m.created_at)) < GROUP_MS);
+  // 'cont' = shares a header with the previous VISIBLE row of the same sender+channel thread.
+  const regroupRow = (el) => el.classList.toggle('cont', continues(prevVisibleRow(el), el));
   function addMsg(m, { live = false } = {}) {
     if (seenIds.has(m.id)) return; seenIds.add(m.id);
     msgLog.push(m);
@@ -477,8 +480,6 @@
     el.className = 'msg' + (m.sender === me() ? ' mine' : '') + (m.message_type === 'handoff' ? ' handoff' : '') + (toMe ? ' tome' : '');
     el.dataset.ch = m.channel; el.dataset.type = m.message_type || ''; el.dataset.sender = m.sender || ''; el.dataset.tome = toMe ? '1' : '';
     el._m = m;
-    const prev = lastEl && lastEl._m;
-    if (sameThread(prev, m) && (tms(m.created_at) - tms(prev.created_at)) < GROUP_MS) el.classList.add('cont');
     el.innerHTML =
       `<span class="t" title="${esc(m.created_at || '')} UTC">${hhmm(m.created_at)}</span>` +
       `<div class="hd"><span class="from" title="Click to filter by this sender">${esc(m.sender)}</span>` +
@@ -487,14 +488,15 @@
       `<div class="body">${linkMentions(esc(m.content))}</div>`;
     const hidden = !passesFilters(el);
     el.style.display = hidden ? 'none' : '';
-    const atBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
-    stream.appendChild(el); lastEl = el;
-    if (!hidden) {
-      // header shown unless the previous VISIBLE row is the same sender+channel thread
-      let pv = el.previousElementSibling; while (pv && !(pv.dataset && 'ch' in pv.dataset && isVisible(pv))) pv = pv.previousElementSibling;
-      el.classList.toggle('solo', !(el.classList.contains('cont') && pv && sameThread(pv._m, m)));
-      if (atBottom) stream.scrollTop = stream.scrollHeight; else { unseen++; showPill(); }
-    }
+    const atBottom = atBottomNow();
+    // Insert in id order: a pushed message lands before the sweep brings older ones from the
+    // same channel, and a row must never sit above a message that preceded it.
+    let ref = null;
+    for (let x = stream.lastElementChild; x && x._m; x = x.previousElementSibling) { if (x._m.id < m.id) break; ref = x; }
+    stream.insertBefore(el, ref);
+    if (ref) applyFilters();                 // out-of-order: regroup the rows around it (rare)
+    else if (!hidden) regroupRow(el);
+    if (!hidden) { if (atBottom) stream.scrollTop = stream.scrollHeight; else { unseen++; showPill(); } }
     if (live && m.sender !== me() && (m.message_type === 'handoff' || toMe)) notifyOS(m);
   }
 
@@ -510,11 +512,11 @@
   function applyFilters() {
     let pv = null;
     for (const el of stream.children) {
-      if (!el.dataset || !('ch' in el.dataset)) continue;   // .sys rows
+      if (!el._m) continue;   // .sys rows
       const vis = passesFilters(el);
       el.style.display = vis ? '' : 'none';
       if (!vis) continue;
-      el.classList.toggle('solo', !(el.classList.contains('cont') && pv && sameThread(pv._m, el._m)));
+      el.classList.toggle('cont', continues(pv, el));
       pv = el;
     }
     $('streamtitle').textContent = filter ? '#' + filter : 'all channels';
@@ -531,12 +533,28 @@
   function hidePill() { unseen = 0; $('newpill').classList.remove('show'); $('paused').hidden = true; }
 
   // ---- desktop notification for a handoff or an @mention while the tab is not in front ------------
+  // A reconnect backfill can deliver a whole outage's worth at once: coalesce anything that
+  // arrives within 700 ms into one card instead of one per message.
+  let notifQ = [], notifTimer = null;
   function notifyOS(m) {
     if (!$('notify').checked || !('Notification' in window) || Notification.permission !== 'granted') return;
     if (document.visibilityState === 'visible' && document.hasFocus()) return;
+    notifQ.push(m);
+    if (!notifTimer) notifTimer = setTimeout(flushNotifs, 700);
+  }
+  function flushNotifs() {
+    notifTimer = null; const q = notifQ; notifQ = [];
+    if (!q.length) return;
     try {
-      const n = new Notification(`${shortOf(m.sender)} · #${m.channel}${m.message_type === 'handoff' ? ' · handoff' : ''}`,
-        { body: (m.content || '').slice(0, 160), tag: 'cc-' + m.id });
+      let n;
+      if (q.length === 1) {
+        const m = q[0];
+        n = new Notification(`${shortOf(m.sender)} · #${m.channel}${m.message_type === 'handoff' ? ' · handoff' : ''}`, { body: (m.content || '').slice(0, 160), tag: 'cc-' + m.id });
+      } else {
+        const hand = q.filter((m) => m.message_type === 'handoff').length;
+        const who = [...new Set(q.map((m) => shortOf(m.sender)))].join(', ');
+        n = new Notification(`${q.length} new for you${hand ? ` · ${hand} handoff${hand > 1 ? 's' : ''}` : ''}`, { body: 'from ' + who, tag: 'cc-batch' });
+      }
       n.onclick = () => { window.focus(); n.close(); };
     } catch {}
   }
@@ -746,12 +764,13 @@
     try {
       const [{ instances: inst }, { channels }] = await Promise.all([api('/api/instances'), api('/api/channels')]);
       renderRoster(inst);
-      // Message sweep. With push up it runs every 4th tick (and right after a (re)connect, to
-      // backfill anything missed while the socket was down); without push it runs every tick.
-      // Push never advances the cursors, so the sweep is the exactly-once backstop — seenIds
-      // drops whatever the socket already delivered.
+      // Message sweep. With a firehose socket up it runs every 10th tick (15 s) as the
+      // exactly-once backstop, and right after a (re)connect to backfill anything missed while
+      // the socket was down. With no socket — or an older leader that only pushes addressed
+      // traffic — it runs every tick, exactly as before. Push never advances the cursors, so the
+      // sweep re-fetches what the socket delivered and seenIds drops the duplicates.
       pollN++;
-      const sweep = !wsOpen || needBackfill || pollN % 4 === 0;
+      const sweep = !wsOpen || !wsFirehose || needBackfill || pollN % 10 === 0;
       if (sweep) {
         needBackfill = false;
         const live = !firstChannels;   // history on the first load is not "new"
@@ -770,7 +789,7 @@
       renderBanner();
       firstChannels = false;
       pollFails = 0;
-      setOK(true, `live · ${wsOpen ? 'push' : 'poll'} · ${channels.length} ch`);
+      setOK(true, `live · ${wsOpen && wsFirehose ? 'push' : 'poll'} · ${channels.length} ch`);
       pollWork(); // read-only work board — self-contained, quiet on error
     } catch (e) {
       pollFails++;
@@ -792,7 +811,9 @@
   // token rides in the query — the hub accepts ?token= for exactly this case and never logs URLs.
   // Frames: {type:'msg', message} → addMsg (seenIds dedupes against the REST sweep). Anything else
   // is ignored. On close we back off (2 s → 30 s) and reconnect; every (re)open flags a backfill.
-  const wsUrl = () => { const b = base(); return b ? b.replace(/^http/, 'ws') + '/cc/ws?identity=' + encodeURIComponent(me()) + '&token=' + encodeURIComponent($('token').value.trim()) : null; };
+  // ?firehose=1 asks the hub for every message (lanes get only what is addressed to them). An
+  // older leader ignores it and pushes addressed traffic only; the hello frame tells us which.
+  const wsUrl = () => { const b = base(); return b ? b.replace(/^http/, 'ws') + '/cc/ws?identity=' + encodeURIComponent(me()) + '&token=' + encodeURIComponent($('token').value.trim()) + '&firehose=1' : null; };
   function closeWs() {
     if (wsTimer) { clearTimeout(wsTimer); wsTimer = null; }
     if (ws) { const s = ws; ws = null; try { s.onclose = null; s.onmessage = null; s.close(); } catch {} }
@@ -803,17 +824,22 @@
     const u = wsUrl(); if (!u || !('WebSocket' in window)) return;
     let sock; try { sock = new WebSocket(u); } catch { return; }
     ws = sock;
-    sock.onopen = () => { if (ws !== sock) return; wsOpen = true; wsBackoff = 2000; needBackfill = true; if (ok) setOK(true, $('meta').textContent.replace(/^live · (push|poll)/, 'live · push')); };
+    sock.onopen = () => { if (ws !== sock) return; wsOpen = true; wsBackoff = 2000; needBackfill = true; };
     sock.onmessage = (ev) => {
       if (ws !== sock) return;
       let frame; try { frame = JSON.parse(ev.data); } catch { return; }
+      if (frame && frame.type === 'hello') {
+        wsFirehose = !!frame.firehose;   // only a firehose socket makes the stream genuinely "push"
+        if (ok) setOK(true, $('meta').textContent.replace(/^live · (push|poll)/, 'live · ' + (wsFirehose ? 'push' : 'poll')));
+        return;
+      }
       if (!frame || frame.type !== 'msg' || !frame.message) return;
       addMsg(frame.message, { live: true });
       renderBanner();
     };
     sock.onclose = () => {
       if (ws !== sock) return;
-      ws = null; wsOpen = false;
+      ws = null; wsOpen = false; wsFirehose = false;
       if (ok) setOK(true, $('meta').textContent.replace(/^live · (push|poll)/, 'live · poll'));
       wsTimer = setTimeout(connectWs, wsBackoff); wsBackoff = Math.min(wsBackoff * 2, 30000);
     };
@@ -827,7 +853,7 @@
   }
   async function start() {
     save(); seenIds = new Set(); cursors = {}; msgLog = []; firstChannels = true; stream.innerHTML = ''; pollFails = 0;
-    closeWs(); lastEl = null; hidePill(); pollN = 0; needBackfill = true;
+    closeWs(); hidePill(); pollN = 0; needBackfill = true;
     workItems = new Map(); workCursor = null; workPollN = 0; $('wboard').innerHTML = '<div class="empty">—</div>'; $('wbsummary').textContent = ''; $('wbmeta').textContent = '';
     if (timer) clearInterval(timer);
     if (hbTimer) clearInterval(hbTimer);

@@ -129,7 +129,13 @@ export function originAllowed(origin, req, allowedOrigins, allowFileOrigin = fal
 //   token: the shared bus token; a WS connect must present it (Authorization: Bearer <t>,
 //          or ?token=/?api_key= for browsers that cannot set handshake headers).
 //   allowedOrigins: extra browser Origins permitted beyond localhost/same-host.
-export function attachWsHub(httpServer, { token, log = () => {}, allowedOrigins = [], allowFileOrigin = false } = {}) {
+//   allowFileOrigin: also accept the literal `null` Origin of a file:// page (opt-in).
+//   authFailLimiter / clientIp: the server's per-IP auth-failure limiter, so a bad ?token= on
+//          the upgrade path trips the same 429 as a bad bearer on REST (a browser page can
+//          drive this path in a loop; REST alone being throttled would leave a token oracle).
+//   ?firehose=1: the operator console asks for EVERY message, not just the addressed ones the
+//          lanes get. Still token-gated, still never echoes a socket its own sends.
+export function attachWsHub(httpServer, { token, log = () => {}, allowedOrigins = [], allowFileOrigin = false, authFailLimiter = null, clientIp = (req) => req.socket?.remoteAddress || '' } = {}) {
   // identity -> Set<socket>. A box may briefly hold two (old + reconnect) — both get the push.
   const conns = new Map();
 
@@ -162,10 +168,14 @@ export function attachWsHub(httpServer, { token, log = () => {}, allowedOrigins 
     const headerTok = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
     const presented = headerTok || url.searchParams.get('token') || url.searchParams.get('api_key') || '';
     if (token && !tokensMatch(presented, token)) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      const lim = authFailLimiter ? authFailLimiter.hit(clientIp(req)) : { limited: false };
+      socket.write(lim.limited
+        ? `HTTP/1.1 429 Too Many Requests\r\nRetry-After: ${lim.retryAfterSec}\r\nConnection: close\r\n\r\n`
+        : 'HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
+    const firehose = url.searchParams.get('firehose') === '1';
     const identity = url.searchParams.get('identity') || '';
     if (!identity) {
       socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
@@ -184,11 +194,12 @@ export function attachWsHub(httpServer, { token, log = () => {}, allowedOrigins 
     );
 
     socket.setNoDelay?.(true);
+    socket._firehose = firehose;
     add(identity, socket);
     log(`[ws] + ${identity} (now ${conns.get(identity).size} socket(s); ${conns.size} identities)`);
 
     // Greet so the bridge knows push is live (it flips from poll-fallback to push-primary).
-    try { socket.write(encodeFrame(JSON.stringify({ type: 'hello', identity }))); } catch {}
+    try { socket.write(encodeFrame(JSON.stringify({ type: 'hello', identity, firehose }))); } catch {}
 
     const cleanup = () => {
       remove(identity, socket);
@@ -232,9 +243,10 @@ export function attachWsHub(httpServer, { token, log = () => {}, allowedOrigins 
     let frame = null;   // built lazily, reused across recipients
     for (const [identity, sockets] of conns) {
       if (msg.sender === identity) continue;             // never echo a lane its own message
-      if (!addressedTo(msg, identity)) continue;
-      if (!frame) frame = encodeFrame(JSON.stringify({ type: 'msg', message: msg }));
+      const addressed = addressedTo(msg, identity);
       for (const socket of sockets) {
+        if (!addressed && !socket._firehose) continue;   // lanes: addressed only; console: everything
+        if (!frame) frame = encodeFrame(JSON.stringify({ type: 'msg', message: msg }));
         try { socket.write(frame); } catch { remove(identity, socket); try { socket.destroy(); } catch {} }
       }
     }
