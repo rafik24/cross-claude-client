@@ -1,162 +1,305 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Cross-Claude — live console</title>
+<title>Crosstalk console</title>
 <style>
+  /* Tokens: design-system/crosstalk-console/MASTER.md. Dark is the default for an always-on ops
+     surface; the sun button switches to the light set (persisted per browser). No web fonts —
+     the console must work fully offline. */
   :root {
-    --bg:#0e1116; --panel:#161b22; --panel2:#1c2230; --line:#2a3140; --text:#e6edf3; --dim:#8b949e;
-    --accent:#4aa3ff; --online:#3fb950; --broadcast:#d29922; --dm:#a371f7; --new:#e3b341; --warn:#f0883e;
-    --t-status:#58a6ff; --t-request:#d29922; --t-response:#3fb950; --t-handoff:#a371f7; --t-done:#8b949e; --t-message:#e6edf3;
-    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace; --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    color-scheme: dark;
+    --bg:#0F172A; --card:#1B2336; --muted:#272F42; --line:#334155; --line-strong:#475569;
+    --fg:#F1F5F9; --quiet:#94A3B8; --faint:#64748B;
+    --accent:#60A5FA; --on-accent:#0B1220;
+    --ok:#22C55E; --info:#38BDF8; --warn:#F59E0B; --work:#FB923C; --hand:#C084FC; --deploy:#2DD4BF; --bad:#F87171;
+    --shadow-lg:0 10px 24px rgba(0,0,0,.45);
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg:#F4F6FA; --card:#FFFFFF; --muted:#E9EDF4; --line:#D5DBE6; --line-strong:#B9C2D2;
+    --fg:#0F172A; --quiet:#526079; --faint:#7A879C;
+    --accent:#2563EB; --on-accent:#FFFFFF;
+    --ok:#15803D; --info:#0369A1; --warn:#B45309; --work:#C2410C; --hand:#7E22CE; --deploy:#0F766E; --bad:#B91C1C;
+    --shadow-lg:0 10px 24px rgba(15,23,42,.14);
+  }
+
   *{box-sizing:border-box} html,body{margin:0;height:100%}
-  body{background:var(--bg);color:var(--text);font-family:var(--sans);display:grid;
-       grid-template-columns:280px 1fr;grid-template-rows:auto auto 1fr auto;height:100vh}
-  header{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
-  header .dot{width:9px;height:9px;border-radius:50%;background:var(--dim)} header .dot.on{background:var(--online)} header .dot.off{background:#f85149}
-  header h1{font-size:13px;margin:0;font-weight:600}
-  header label{font-size:11px;color:var(--dim);margin-left:6px}
-  header input{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 8px;font-size:12px;font-family:var(--mono)}
-  header input#base{width:190px} header input#token{width:120px} header input#me{width:120px}
-  header button#connect{background:var(--accent);border:1px solid var(--accent);color:#06121f;font-weight:700;font-size:12px;border-radius:6px;padding:5px 12px;cursor:pointer;margin-left:6px}
-  header button#connect:hover{filter:brightness(1.08)}
-  header .meta{color:var(--dim);font-size:11px;font-family:var(--mono);margin-left:auto}
-  /* settings strip */
-  .settings{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:5px 14px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;font-size:11px;color:var(--dim)}
-  .settings label{display:flex;align-items:center;gap:5px}
-  .settings input[type=number]{width:52px;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:5px;padding:3px 5px;font-size:11px;font-family:var(--mono)}
-  .settings input#peers{width:150px;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:5px;padding:3px 6px;font-size:11px;font-family:var(--mono)}
-  .settings .sw{display:flex;align-items:center;gap:5px;cursor:pointer}
-  .banner{grid-column:1/-1;background:rgba(240,136,62,.12);border-bottom:1px solid var(--warn);color:var(--warn);padding:6px 14px;font-size:12px;display:none}
-  .banner.show{display:block} .banner b{color:var(--text)}
-  aside{grid-row:3/5;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:10px}
-  aside h2{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);margin:6px 6px 8px;display:flex;justify-content:space-between}
-  aside h2 .cnt{color:var(--dim);font-weight:400}
-  .who{padding:7px 9px;border-radius:8px;margin-bottom:5px;background:var(--panel2);cursor:pointer}
-  .who:hover{outline:1px solid var(--line)}
-  .who .row{display:flex;align-items:center;gap:7px}
-  .who .pip{width:8px;height:8px;border-radius:50%;background:var(--online);flex:none} .who.offline .pip{background:var(--dim)}
-  .who.offline{opacity:.5} .who .id{font-family:var(--mono);font-size:12px;font-weight:600;word-break:break-all}
-  .who .desc{font-size:11px;color:var(--dim);margin-top:3px;line-height:1.35}
-  .who .stale{font-size:9px;text-transform:uppercase;letter-spacing:.4px;padding:1px 5px;border-radius:4px;background:rgba(240,136,62,.18);color:var(--warn);margin-left:auto;flex:none;font-family:var(--mono)}
-  .chan{padding:6px 9px;border-radius:7px;margin-bottom:3px;cursor:pointer;font-family:var(--mono);font-size:12px;display:flex;gap:6px;align-items:center}
-  .chan:hover{background:var(--panel2)} .chan.sel{background:var(--panel2);outline:1px solid var(--accent)}
-  .chan.offwin{opacity:.45} .chan .n{flex:1} .chan .c{color:var(--dim);font-size:11px}
-  .chan .newdot{width:7px;height:7px;border-radius:50%;background:var(--new);flex:none;box-shadow:0 0 6px var(--new)}
-  .chan.newc .n{color:var(--new);font-weight:700}
-  main{grid-row:3/4;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:1px}
-  .msg{padding:5px 8px;border-radius:6px;font-size:13px;line-height:1.5;display:flex;gap:9px;align-items:baseline}
-  .msg:hover{background:rgba(255,255,255,.02)}
-  .msg .ts{color:var(--dim);font-family:var(--mono);font-size:11px;flex:none;width:56px}
-  .msg .ch{font-family:var(--mono);font-size:11px;color:var(--dim);flex:none;min-width:96px}
-  .msg .from{font-family:var(--mono);font-size:12px;font-weight:600;flex:none}
-  .msg .type{font-size:9px;text-transform:uppercase;letter-spacing:.5px;padding:1px 5px;border-radius:4px;flex:none;background:var(--panel2)}
-  .type.status{color:var(--t-status)} .type.request{color:var(--t-request)} .type.response{color:var(--t-response)}
-  .type.handoff{color:var(--t-handoff)} .type.done{color:var(--t-done)} .type.message{color:var(--t-message)}
-  .msg .body{flex:1;white-space:pre-wrap;word-break:break-word}
-  .msg.mine{background:rgba(74,163,255,.06)} .msg.handoff{background:rgba(163,113,247,.08)}
-  .sys{color:var(--dim);font-style:italic;font-size:12px;padding:4px 8px}
-  footer{grid-column:2/3;grid-row:4/5;display:flex;gap:7px;padding:10px 14px;background:var(--panel);border-top:1px solid var(--line);flex-wrap:wrap;position:relative}
-  footer select,footer input,footer button{font-size:13px;border-radius:7px;border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:8px 10px}
-  footer select{font-family:var(--mono)} footer input#chan{width:150px;font-family:var(--mono)} footer input#body{flex:1;min-width:200px}
-  footer button{background:var(--accent);border-color:var(--accent);color:#06121f;font-weight:700;cursor:pointer;padding:8px 16px}
-  footer button:disabled{opacity:.5;cursor:default}
-  .empty{color:var(--dim);font-size:12px;padding:6px}
-  /* @mention autocomplete */
-  #mentions{position:absolute;bottom:56px;left:14px;min-width:220px;max-height:220px;overflow-y:auto;background:var(--panel2);
-            border:1px solid var(--accent);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.5);display:none;z-index:20}
-  #mentions.show{display:block}
-  #mentions .mi{padding:7px 10px;font-family:var(--mono);font-size:12px;cursor:pointer;display:flex;gap:8px;align-items:center}
-  #mentions .mi .pip{width:7px;height:7px;border-radius:50%;background:var(--online);flex:none} #mentions .mi.off .pip{background:var(--dim)}
-  #mentions .mi.active{background:var(--accent);color:#06121f} #mentions .mi small{color:var(--dim);margin-left:auto}
-  #mentions .mi.active small{color:#06121f}
-  /* ---- work board (read-only, third column) ------------------------------ */
-  body.board-on{grid-template-columns:280px minmax(0,1fr) minmax(340px,440px)}
-  #boardpanel{grid-column:3/4;grid-row:3/5;display:none;flex-direction:column;background:var(--panel);border-left:1px solid var(--line);overflow:hidden}
+  [hidden]{display:none!important}
+  body{background:var(--bg);color:var(--fg);font:13px/1.45 var(--sans);height:100vh;display:grid;
+       grid-template-rows:40px auto minmax(0,1fr);grid-template-columns:260px minmax(0,1fr) 0;
+       grid-template-areas:"top top top" "attn attn attn" "left main right"}
+  body.board-on{grid-template-columns:260px minmax(0,1fr) 380px}
+  svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+  svg.i.s{width:14px;height:14px}
+  button,input,select{font:inherit;color:inherit}
+  button{cursor:pointer}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  ::placeholder{color:var(--faint)}
+  @media (prefers-reduced-motion: reduce){ *,*::before,*::after{transition:none!important;animation:none!important} }
+
+  /* ---- semantic status colours (one class sets --c; glyph, text, bar and legend all read it) */
+  .s-queued{--c:var(--faint)} .s-claimed{--c:var(--info)} .s-impl{--c:var(--work)} .s-review{--c:var(--hand)}
+  .s-merged{--c:var(--ok)} .s-deployed{--c:var(--deploy)} .s-blocked{--c:var(--bad)} .s-abandoned{--c:var(--faint)} .s-stale{--c:var(--warn)}
+  .t-message{--c:var(--quiet)} .t-status{--c:var(--info)} .t-request{--c:var(--warn)} .t-response{--c:var(--ok)}
+  .t-handoff{--c:var(--hand)} .t-done{--c:var(--quiet)} .t-warn{--c:var(--warn)} .t-bad{--c:var(--bad)}
+  .tag{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 5px;border-radius:4px;font-family:var(--mono);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;
+       background:color-mix(in srgb,var(--c,var(--quiet)) 16%,transparent);color:var(--c,var(--quiet))}
+
+  /* ---- top bar ---------------------------------------------------------------------- */
+  .top{grid-area:top;display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--card);border-bottom:1px solid var(--line);min-width:0}
+  .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;letter-spacing:.01em;flex:none}
+  .brand .mark{width:18px;height:18px;border-radius:5px;background:linear-gradient(135deg,var(--accent),var(--hand));display:grid;place-items:center;color:var(--on-accent)}
+  .chip{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);font-family:var(--mono);font-size:12px;color:var(--quiet);transition:border-color .15s;min-width:0;max-width:52vw}
+  .chip:hover{border-color:var(--line-strong)}
+  .chip #chipinfo{color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip #meta{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip .sep{color:var(--faint)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+  .dot.on{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
+  .dot.off{background:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 22%,transparent)}
+  #connform{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
+  #connform label{font-size:12px;color:var(--quiet);margin-left:4px}
+  #connform input{height:28px;padding:0 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg);font-family:var(--mono);font-size:12px}
+  #connform input#base{width:200px} #connform input#token{width:130px} #connform input#me{width:120px}
+  #connform button{height:28px;padding:0 12px;border:0;border-radius:6px;background:var(--accent);color:var(--on-accent);font-weight:600}
+  #connform button:hover{filter:brightness(1.08)}
+  .top .right{margin-left:auto;display:flex;align-items:center;gap:4px;flex:none}
+  .ib{width:28px;height:28px;display:grid;place-items:center;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--quiet);transition:background .15s,color .15s}
+  .ib:hover{background:var(--muted);color:var(--fg)}
+  .ib.on{color:var(--accent);border-color:var(--line)}
+  .who-me{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 6px;font-family:var(--mono);font-size:12px;color:var(--quiet)}
+  .who-me .av{width:20px;height:20px;border-radius:50%;background:var(--muted);display:grid;place-items:center;color:var(--fg);font-size:12px;font-family:var(--sans);font-weight:600}
+  #toast{position:fixed;top:48px;left:50%;transform:translate(-50%,-8px);opacity:0;pointer-events:none;background:var(--card);border:1px solid var(--line-strong);border-left:3px solid var(--warn);border-radius:6px;padding:6px 12px;font-size:13px;box-shadow:var(--shadow-lg);z-index:30;transition:opacity .2s,transform .2s}
+  #toast.show{opacity:1;transform:translate(-50%,0)}
+
+  /* ---- settings popover ------------------------------------------------------------- */
+  #settings{position:absolute;top:44px;right:12px;width:340px;background:var(--card);border:1px solid var(--line-strong);border-radius:8px;box-shadow:var(--shadow-lg);padding:10px 12px;z-index:20;display:grid;gap:6px;font-size:12px}
+  #settings h3{margin:4px 0 2px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--quiet);font-weight:600}
+  #settings h3:first-child{margin-top:0}
+  #settings label{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:26px;cursor:pointer}
+  #settings input[type=number]{width:52px;height:24px;padding:0 6px;border:1px solid var(--line);border-radius:4px;background:var(--bg);font-family:var(--mono);text-align:right}
+  #settings input[type=text]{width:190px;height:24px;padding:0 6px;border:1px solid var(--line);border-radius:4px;background:var(--bg);font-family:var(--mono);font-size:12px}
+  #settings input[type=checkbox]{appearance:none;width:30px;height:16px;border-radius:8px;background:var(--line-strong);position:relative;margin:0;flex:none;cursor:pointer;transition:background .15s}
+  #settings input[type=checkbox]::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--card);transition:transform .15s}
+  #settings input[type=checkbox]:checked{background:var(--accent)} #settings input[type=checkbox]:checked::after{transform:translateX(14px)}
+  #settings .note{color:var(--faint);line-height:1.4}
+  #settings .unit{display:inline-flex;align-items:center;gap:4px;color:var(--quiet)}
+
+  /* ---- attention strip (unacked handoffs) ------------------------------------------- */
+  .attn{grid-area:attn;display:none}
+  .attn.show{display:grid;gap:2px;background:color-mix(in srgb,var(--bad) 9%,var(--card));border-bottom:1px solid color-mix(in srgb,var(--bad) 40%,var(--line));border-left:3px solid var(--bad);padding:6px 12px;max-height:160px;overflow-y:auto}
+  .attn .hd{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--bad);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+  .attn .hd .n{font-family:var(--mono);font-weight:400;color:var(--fg);text-transform:none;letter-spacing:0}
+  .arow{display:grid;grid-template-columns:44px minmax(0,1fr);align-items:center;gap:10px;height:26px;padding:0 6px;border-radius:4px}
+  .arow .age{font-family:var(--mono);font-size:12px;color:var(--bad);font-variant-numeric:tabular-nums}
+  .arow .txt{display:flex;align-items:center;gap:8px;min-width:0;font-size:13px}
+  .arow .txt .who{font-family:var(--mono);font-size:12px;color:var(--fg);white-space:nowrap}
+  .arow .txt .ch{font-family:var(--mono);font-size:12px;color:var(--quiet);white-space:nowrap}
+  .arow .txt .ex{color:var(--quiet);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+
+  /* ---- rails ------------------------------------------------------------------------ */
+  .rail{background:var(--card);overflow-y:auto;min-height:0;display:flex;flex-direction:column}
+  .left{grid-area:left;border-right:1px solid var(--line);overflow:hidden}
+  .left .sec{min-height:0;overflow-y:auto} .left .sec.fleet{flex:0 1 auto;max-height:60%} .left .sec.chans{flex:1 1 auto;border-top:1px solid var(--line)}
+  .left .sec h2{position:sticky;top:0;background:var(--card);z-index:1;padding-top:2px;padding-bottom:2px;margin:0 0 2px}
+  #boardpanel{grid-area:right;border-left:1px solid var(--line);display:none}
   body.board-on #boardpanel{display:flex}
-  #boardpanel .wb-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);flex:none}
-  #boardpanel .wb-head h2{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);margin:0}
-  #boardpanel .wb-head .wb-meta{margin-left:auto;font-size:10px;color:var(--dim);font-family:var(--mono)}
-  .wb-summary{padding:6px 12px;font-size:11px;color:var(--dim);border-bottom:1px solid var(--line);font-family:var(--mono);flex:none}
-  .wb-list{flex:1;overflow-y:auto;padding:8px}
-  .wb-item{padding:6px 8px;border-radius:7px;margin-bottom:4px;background:var(--panel2);border-left:3px solid transparent;margin-left:calc(var(--d,0)*16px)}
-  .wb-item.epic{border-left-color:var(--line)}
-  .wb-item.blk{border-left-color:#f85149;background:rgba(248,81,73,.08)}
-  .wb-item.stl{border-left-color:var(--warn);background:rgba(240,136,62,.07)}
-  .wb-item.abn{opacity:.5}
-  .wb-row{display:flex;align-items:baseline;gap:7px}
-  .wb-id{font-family:var(--mono);font-size:11px;color:var(--dim);flex:none}
-  .wb-badge{font-size:9px;text-transform:uppercase;letter-spacing:.4px;padding:1px 5px;border-radius:4px;flex:none;font-family:var(--mono);background:rgba(255,255,255,.04)}
-  .wb-kind{font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--dim);flex:none;font-family:var(--mono)}
-  .wb-item.epic .wb-kind{color:var(--accent);font-weight:700}
-  .wb-title{flex:1;font-size:12px;line-height:1.4;word-break:break-word}
+  .sec{padding:10px 8px 6px}
+  .sec h2,.wb-head h2{margin:0 0 4px;padding:0 6px;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--quiet)}
+  .sec h2 .cnt,.wb-head .wb-meta{font-family:var(--mono);font-weight:400;font-variant-numeric:tabular-nums;text-transform:none;letter-spacing:0}
+  .wb-head .wb-meta{margin-left:auto;color:var(--faint)}
+  .host{display:flex;align-items:center;gap:6px;padding:8px 6px 2px;font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .host .hn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .host .n{margin-left:auto}
+  .who,.chan{display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:8px;row-gap:1px;align-items:center;min-height:30px;padding:3px 6px 3px 8px;border-radius:4px;cursor:pointer;border-left:2px solid transparent;transition:background .15s}
+  .who:hover,.chan:hover{background:var(--muted)}
+  .chan.sel{background:var(--muted);border-left-color:var(--accent)}
+  .who.offline,.chan.offwin{opacity:.55}
+  .who .pip{grid-column:1;grid-row:1/3;width:7px;height:7px;border-radius:50%;background:var(--ok)}
+  .who.offline .pip{background:var(--faint)}
+  .who .id,.chan .n{grid-column:2;grid-row:1;font-family:var(--mono);font-size:12px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .who .id{display:flex;align-items:center;gap:6px} .who .id .nm{overflow:hidden;text-overflow:ellipsis;min-width:0} .who .id .tag{height:16px;padding:0 4px}
+  .who .r,.chan .c{grid-column:3;grid-row:1/3;font-family:var(--mono);font-size:12px;color:var(--faint);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .who .sub{grid-column:2;grid-row:2;font-size:12px;color:var(--quiet);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .chan{grid-template-rows:auto}
+  .chan svg.i{grid-column:1;color:var(--faint)}
+  .chan .newdot{grid-column:1;width:7px;height:7px;border-radius:50%;background:var(--warn);animation:pulse 2s ease-out 3}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--warn) 55%,transparent)}100%{box-shadow:0 0 0 7px transparent}}
+  .chan.newc .n{color:var(--warn)}
+  .more,.empty{padding:6px 8px;font-size:12px;color:var(--faint)}
+
+  /* ---- centre: toolbar + stream + composer ----------------------------------------- */
+  .center{grid-area:main;display:grid;grid-template-rows:36px minmax(0,1fr) auto;min-width:0;min-height:0;position:relative}
+  .tb{display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line);background:var(--card);white-space:nowrap;overflow:hidden}
+  .tb #streamtitle{font-family:var(--mono);font-size:14px;color:var(--fg)}
+  .tb .hint{margin-left:auto;font-size:12px;color:var(--faint)}
+  #stream{overflow-y:auto;padding:8px 12px 12px;display:flex;flex-direction:column;gap:1px}
+  .msg{display:grid;grid-template-columns:60px minmax(0,1fr);column-gap:8px;padding:3px 6px;border-radius:4px;border-left:2px solid transparent;transition:background .15s}
+  .msg:hover{background:color-mix(in srgb,var(--muted) 60%,transparent)}
+  .msg .t{font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums;padding-top:2px}
+  .msg .hd{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
+  .msg .from{font-weight:600;font-size:13px}
+  .msg .ch{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .msg .body{grid-column:2/3;font-size:13px;color:var(--fg);white-space:pre-wrap;word-break:break-word;max-width:90ch}
+  .msg.mine{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+  .msg.handoff{border-left-color:var(--hand);background:color-mix(in srgb,var(--hand) 6%,transparent)}
+  .msg.tome{border-left-color:var(--accent)}
+  .sys{color:var(--quiet);font-style:italic;font-size:12px;padding:4px 8px}
+  footer{border-top:1px solid var(--line);background:var(--card);padding:8px 12px;display:grid;gap:6px;position:relative}
+  footer .line{display:flex;align-items:center;gap:6px}
+  footer .field{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg);min-width:0}
+  footer .field input,footer .field select{border:0;background:none;outline:none;height:26px;padding:0;font-size:13px;min-width:0}
+  footer .field.fch{width:180px;font-family:var(--mono);font-size:12px;color:var(--faint)}
+  footer .field.fch input{font-family:var(--mono);font-size:12px;width:100%;color:var(--fg)}
+  footer .field.fty select{font-family:var(--mono);font-size:12px;background:var(--bg)}
+  footer .field.fbody{flex:1}
+  footer .field.fbody input{width:100%}
+  footer .field:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 25%,transparent)}
+  footer #send{height:28px;padding:0 12px;border:0;border-radius:6px;background:var(--accent);color:var(--on-accent);font-weight:600;display:inline-flex;align-items:center;gap:6px}
+  footer #send:hover{filter:brightness(1.08)}
+  footer #send:disabled{opacity:.45;cursor:default;filter:none}
+  footer .keys{font-family:var(--mono);font-size:12px;color:var(--faint);display:flex;gap:14px;flex-wrap:wrap}
+  kbd{font-family:var(--mono);font-size:12px;padding:0 4px;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;color:var(--quiet)}
+  #mentions{position:absolute;left:12px;bottom:calc(100% - 4px);min-width:300px;max-height:260px;overflow-y:auto;background:var(--card);border:1px solid var(--line-strong);border-radius:8px;box-shadow:var(--shadow-lg);padding:4px;z-index:10;display:none}
+  #mentions.show{display:block}
+  #mentions .mi{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:4px;font-family:var(--mono);font-size:12px;cursor:pointer}
+  #mentions .mi .pip{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+  #mentions .mi.off .pip{background:var(--faint)}
+  #mentions .mi small{margin-left:auto;color:var(--faint);font-family:var(--sans);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #mentions .mi.active{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+
+  /* ---- work board ----------------------------------------------------------------- */
+  .wb-head{padding:10px 8px 4px;flex:none}
+  .wb-summary{padding:4px 12px 8px;display:grid;gap:6px;border-bottom:1px solid var(--line);flex:none}
+  .wb-summary:empty{display:none}
+  .bar{display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--muted)}
+  .bar i{display:block;height:100%;background:var(--c)}
+  .legend{display:flex;flex-wrap:wrap;gap:4px 10px;font-family:var(--mono);font-size:12px;color:var(--quiet);font-variant-numeric:tabular-nums}
+  .legend span{display:inline-flex;align-items:center;gap:4px}
+  .legend span.warn{color:var(--warn)}
+  .legend .k{width:8px;height:8px;border-radius:2px;background:var(--c)}
+  .wb-list{flex:1;overflow-y:auto;padding:6px 8px 12px}
+  .wb-item{display:grid;grid-template-columns:34px 18px minmax(0,1fr) auto;column-gap:6px;row-gap:1px;align-items:center;min-height:30px;padding:3px 6px 3px 8px;border-radius:4px;border-left:2px solid transparent;margin-left:calc(var(--d,0)*14px);transition:background .15s}
+  .wb-item:hover{background:var(--muted)}
+  .wb-item.epic{margin-top:6px}
   .wb-item.epic .wb-title{font-weight:600}
-  .wb-ago{font-size:10px;color:var(--dim);font-family:var(--mono);flex:none;white-space:nowrap}
-  .wb-sub{display:flex;align-items:center;gap:8px;margin-top:3px;flex-wrap:wrap;padding-left:2px}
-  .wb-owner{font-size:11px;font-family:var(--mono);color:var(--text)}
-  .wb-unowned{color:var(--dim);font-style:italic}
-  .wb-tag{font-size:10px;font-family:var(--mono);color:var(--dim);background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:4px;padding:0 5px}
-  .wb-ref{color:var(--accent)}
-  .wb-chip{font-size:9px;text-transform:uppercase;letter-spacing:.4px;padding:1px 6px;border-radius:4px;font-family:var(--mono)}
-  .wb-chip.blk{background:rgba(248,81,73,.18);color:#f85149}
-  .wb-chip.stl{background:rgba(240,136,62,.18);color:var(--warn)}
-  /* per-state badge glyph/text colour */
-  .s-queued{color:var(--dim)} .s-claimed{color:var(--t-status)} .s-impl{color:var(--warn)}
-  .s-review{color:var(--t-handoff)} .s-merged{color:var(--online)} .s-deployed{color:#2dd4bf}
-  .s-blocked{color:#f85149} .s-abandoned{color:#6e7681}
-  @media (max-width:900px){ body.board-on{grid-template-columns:280px 1fr} body.board-on #boardpanel{display:none} }
+  .wb-item.blk{border-left-color:var(--bad);background:color-mix(in srgb,var(--bad) 7%,transparent)}
+  .wb-item.stl{border-left-color:var(--warn)}
+  .wb-item.abn{opacity:.5}
+  .wb-item.done .wb-title{color:var(--quiet)}
+  .wb-id{grid-column:1;grid-row:1;font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .wb-g{grid-column:2;grid-row:1;display:grid;place-items:center;color:var(--c,var(--faint))}
+  .wb-title{grid-column:3;grid-row:1;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .wb-r{grid-column:4;grid-row:1/3;display:flex;align-items:center;gap:4px}
+  .wb-ago{font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums;min-width:2.5ch;text-align:right}
+  .wb-sub{grid-column:3;grid-row:2;display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12px;color:var(--quiet);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .wb-state{color:var(--c,var(--quiet))}
+  .wb-kind{color:var(--faint)}
+  .wb-item.epic .wb-kind{color:var(--accent)}
+  .wb-unowned{color:var(--faint);font-style:italic}
+  .wb-tag{padding:0 4px;border-radius:3px;background:var(--muted);color:var(--quiet)}
+  .wb-tag.wb-ref{color:var(--accent)}
+
+  @media (max-width:1100px){ body.board-on{grid-template-columns:240px minmax(0,1fr) 0} body.board-on #boardpanel{display:none} }
+  @media (max-width:760px){ body,body.board-on{grid-template-columns:200px minmax(0,1fr) 0} .chip{max-width:40vw} .tb .hint{display:none} footer .field.fch{width:120px} }
 </style>
 </head>
 <body>
-  <header>
-    <span class="dot" id="dot"></span><h1>Cross-Claude console</h1>
-    <label>bus</label><input id="base" placeholder="http://localhost:8787" />
-    <label title="The bus shared secret: CC_TOKEN from ~/.claude/.cross-claude-bus (a.k.a. MCP_API_KEY) — NOT an Anthropic API key.">token</label><input id="token" type="password" placeholder="bus token (CC_TOKEN)" title="The bus shared secret: CC_TOKEN from ~/.claude/.cross-claude-bus (a.k.a. MCP_API_KEY) — NOT an Anthropic API key." />
-    <label>as</label><input id="me" value="po-console" />
+<!-- Icons: paths derived from Feather Icons (https://feathericons.com), MIT License, Copyright (c) 2013-2023 Cole Bemis. See THIRD_PARTY_NOTICES.md. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
+  <symbol id="i-half" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="brand"><span class="mark"><svg class="i s"><use href="#i-zap"/></svg></span>Crosstalk</div>
+  <button class="chip" id="chip" title="Connection status. Click to change bus, token or identity.">
+    <span class="dot" id="dot"></span><span id="chipinfo">not connected</span><span class="sep">·</span><span id="meta">idle</span>
+  </button>
+  <div id="connform">
+    <label for="base">bus</label><input id="base" placeholder="http://localhost:8787" />
+    <label for="token" title="The bus shared secret: CC_TOKEN from ~/.claude/.crosstalk (legacy ~/.claude/.cross-claude-bus) — NOT an Anthropic API key.">token</label><input id="token" type="password" placeholder="CC_TOKEN" title="The bus shared secret: CC_TOKEN from ~/.claude/.crosstalk (legacy ~/.claude/.cross-claude-bus) — NOT an Anthropic API key." />
+    <label for="me">as</label><input id="me" value="po-console" />
     <button id="connect">Connect</button>
-    <span class="meta" id="meta">idle</span>
-  </header>
-
-  <div class="settings">
-    <label title="Channels with no message newer than this are hidden (unless 'show all').">channels active ≤ <input id="chanWin" type="number" min="1" max="1440" value="15" /> min</label>
-    <label title="Participants not seen within this window are hidden (unless 'show all').">participants active ≤ <input id="partWin" type="number" min="1" max="1440" value="15" /> min</label>
-    <label class="sw" title="Show every participant, including those outside the active window."><input id="showAllParts" type="checkbox" /> show all participants</label>
-    <label class="sw" title="Show every channel, including those outside the active window."><input id="showAllChans" type="checkbox" /> show all channels</label>
-    <label class="sw" title="Show the read-only work board panel on the right, grouped by epic."><input id="showBoard" type="checkbox" /> work board</label>
-    <label title="Extra hosts to probe when following a moved leader (comma-separated host or host:port). The roster's own hosts are probed automatically, so this is usually only needed to seed discovery before the first connect.">peers <input id="peers" type="text" placeholder="host1, host2:8787" /></label>
-    <span class="meta" id="wininfo" style="margin-left:auto"></span>
   </div>
+  <div class="right">
+    <button class="ib" id="boardBtn" title="Work board (toggle)"><svg class="i"><use href="#i-board"/></svg></button>
+    <button class="ib" id="theme" title="Switch theme"><svg class="i"><use href="#i-sun"/></svg></button>
+    <button class="ib" id="gear" title="Settings" aria-controls="settings"><svg class="i"><use href="#i-gear"/></svg></button>
+  </div>
+</header>
+<div id="toast" role="status" aria-live="polite"></div>
 
-  <div class="banner" id="ackbanner"></div>
+<div id="settings" role="dialog" aria-label="Settings" hidden>
+  <h3>Visibility</h3>
+  <label title="Channels with no message newer than this are hidden (unless 'show all').">Channels active within <span class="unit"><input id="chanWin" type="number" min="1" max="1440" value="15" /> min</span></label>
+  <label title="Participants not seen within this window are hidden (unless 'show all').">Participants active within <span class="unit"><input id="partWin" type="number" min="1" max="1440" value="15" /> min</span></label>
+  <label title="Show every channel, including those outside the active window.">Show all channels <input id="showAllChans" type="checkbox" /></label>
+  <label title="Show every participant, including those outside the active window.">Show all participants <input id="showAllParts" type="checkbox" /></label>
+  <label title="Show the read-only work board panel on the right, grouped by epic.">Work board <input id="showBoard" type="checkbox" /></label>
+  <h3>Discovery</h3>
+  <label title="Extra hosts to probe when following a moved leader (comma-separated host or host:port). The roster's own hosts are probed automatically, so this is usually only needed to seed discovery before the first connect.">Peer seeds <input id="peers" type="text" placeholder="host1, host2:8787" /></label>
+  <div class="note">Roster hosts are probed automatically; seeds only matter before the first connect. The leader is followed by highest election epoch.</div>
+  <div class="note" id="wininfo"></div>
+</div>
 
-  <aside>
-    <h2>Participants <span class="cnt" id="rcount"></span></h2>
+<section class="attn" id="ackbanner" aria-label="Handoffs needing acknowledgement"></section>
+
+<aside class="rail left">
+  <div class="sec fleet">
+    <h2><svg class="i s"><use href="#i-users"/></svg>Fleet <span class="cnt" id="rcount"></span></h2>
     <div id="roster"><div class="empty">—</div></div>
-    <h2 style="margin-top:14px">Channels <span class="cnt" id="ccount"></span></h2>
+  </div>
+  <div class="sec chans">
+    <h2><svg class="i s"><use href="#i-hash"/></svg>Channels <span class="cnt" id="ccount"></span></h2>
     <div id="channels"></div>
-  </aside>
+  </div>
+</aside>
 
-  <main id="stream"><div class="sys">Enter the bus token (CC_TOKEN from ~/.claude/.cross-claude-bus) and click Connect. Messages stream here.</div></main>
-
-  <section id="boardpanel">
-    <div class="wb-head"><h2>Work board</h2><span class="wb-meta" id="wbmeta"></span></div>
-    <div class="wb-summary" id="wbsummary"></div>
-    <div class="wb-list" id="wboard"><div class="empty">—</div></div>
-  </section>
-
+<div class="center">
+  <div class="tb"><span id="streamtitle">all channels</span><span class="hint">click a channel to filter</span></div>
+  <main id="stream"><div class="sys">Enter the bus token (CC_TOKEN from ~/.claude/.crosstalk) and click Connect. Messages stream here.</div></main>
   <footer>
-    <div id="mentions"></div>
-    <input id="chan" list="chanlist" placeholder="channel (e.g. general)" value="general" />
-    <datalist id="chanlist"></datalist>
-    <select id="type">
-      <option>message</option><option selected>status</option><option>request</option>
-      <option>response</option><option>handoff</option><option>done</option>
-    </select>
-    <input id="body" placeholder="message… (Enter to send · @ to mention)" autocomplete="off" />
-    <button id="send" disabled>Send</button>
+    <div id="mentions" role="listbox" aria-label="Mention a session"></div>
+    <div class="line">
+      <label class="field fch"><svg class="i s"><use href="#i-hash"/></svg><input id="chan" list="chanlist" placeholder="channel" value="general" aria-label="channel" /></label>
+      <datalist id="chanlist"></datalist>
+      <label class="field fty"><select id="type" aria-label="message type">
+        <option>message</option><option selected>status</option><option>request</option>
+        <option>response</option><option>handoff</option><option>done</option>
+      </select></label>
+      <label class="field fbody"><input id="body" placeholder="message… (Enter to send · @ to mention)" autocomplete="off" aria-label="message" /></label>
+      <button id="send" disabled><svg class="i s"><use href="#i-send"/></svg>Send</button>
+    </div>
+    <div class="keys"><span><kbd>Enter</kbd> send</span><span><kbd>@</kbd> mention · <kbd>↑</kbd><kbd>↓</kbd> pick · <kbd>Tab</kbd> accept</span><span><kbd>Esc</kbd> close</span></div>
   </footer>
+</div>
+
+<aside class="rail" id="boardpanel" aria-label="Work board">
+  <div class="wb-head"><h2><svg class="i s"><use href="#i-board"/></svg>Work board <span class="wb-meta" id="wbmeta"></span></h2></div>
+  <div class="wb-summary" id="wbsummary"></div>
+  <div class="wb-list" id="wboard"><div class="empty">—</div></div>
+</aside>
 
 <script>
   const $ = (id) => document.getElementById(id);
@@ -201,6 +344,7 @@
   const agoTxt = (s) => { const ms = Date.now() - tms(s); if (!tms(s)) return ''; const m = Math.floor(ms/60000); if (m < 1) return 'just now'; if (m < 60) return m + 'm ago'; const h = Math.floor(m/60); if (h < 24) return h + 'h ago'; return Math.floor(h/24) + 'd ago'; };
   const esc = (s) => (s||'').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const shortOf = (id) => (id || '').split('/').pop();
+  const ICON = (n) => `<svg class="i s" aria-hidden="true"><use href="#i-${n}"/></svg>`;
   const chanWin = () => Math.max(1, Number($('chanWin').value) || 15) * 60000;
   const partWin = () => Math.max(1, Number($('partWin').value) || 15) * 60000;
   const showAllParts = () => $('showAllParts').checked;
@@ -259,7 +403,16 @@
     if (!r.ok) throw new Error(path + ' → ' + r.status);
     return r.json();
   }
-  function setOK(on, note) { ok = on; $('dot').className = 'dot ' + (on ? 'on' : 'off'); $('meta').textContent = note || (on ? 'live' : 'error'); $('send').disabled = !on; }
+  let formPinned = false; // the operator opened the connect form by clicking the status chip
+  function setOK(on, note) {
+    ok = on; $('dot').className = 'dot ' + (on ? 'on' : 'off'); $('meta').textContent = note || (on ? 'live' : 'error'); $('send').disabled = !on;
+    document.body.classList.toggle('connected', on);
+    const lc = readLeaderCache();
+    $('chipinfo').textContent = (on && lc) ? `${lc.host} · epoch ${lc.epoch}${leaderRev ? ' · rev ' + leaderRev : ''}` : (base() || 'not connected');
+    if (on && !formPinned) $('connform').hidden = true;
+  }
+  let toastTimer = null;
+  function toast(text) { const t = $('toast'); t.textContent = text; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 6000); }
 
   function addMsg(m) {
     if (seenIds.has(m.id)) return; seenIds.add(m.id);
@@ -268,14 +421,15 @@
     // (Dropping here permanently loses messages that arrive while another channel is selected,
     //  because the poll cursor + seenIds have already consumed them and won't re-fetch.)
     const el = document.createElement('div');
-    el.className = 'msg' + (m.sender === me() ? ' mine' : '') + (m.message_type === 'handoff' ? ' handoff' : '');
+    const toMe = (m.content || '').includes('@' + me());
+    el.className = 'msg' + (m.sender === me() ? ' mine' : '') + (m.message_type === 'handoff' ? ' handoff' : '') + (toMe ? ' tome' : '');
     el.dataset.ch = m.channel;
     el.innerHTML =
-      `<span class="ts">${hhmm(m.created_at)}</span>` +
-      `<span class="ch">#${esc(m.channel)}</span>` +
-      `<span class="type ${esc(m.message_type)}">${esc(m.message_type)}</span>` +
-      `<span class="from">${esc(m.sender)}</span>` +
-      `<span class="body">${esc(m.content)}</span>`;
+      `<span class="t" title="${esc(m.created_at || '')} UTC">${hhmm(m.created_at)}</span>` +
+      `<div class="hd"><span class="from">${esc(m.sender)}</span>` +
+      `<span class="tag t-${esc(m.message_type)}">${esc(m.message_type)}</span>` +
+      `<span class="ch">#${esc(m.channel)}</span></div>` +
+      `<div class="body">${esc(m.content)}</div>`;
     const hidden = filter && m.channel !== filter;
     el.style.display = hidden ? 'none' : '';
     const atBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
@@ -299,26 +453,33 @@
   function renderBanner() {
     const un = computeUnacked();
     const b = $('ackbanner');
-    if (!un.length) { b.className = 'banner'; b.textContent = ''; return; }
-    b.className = 'banner show';
-    b.innerHTML = '⚠ ' + un.length + ' unacked handoff' + (un.length > 1 ? 's' : '') + ': ' +
-      un.map((h) => `<b>${esc(h.sender)}</b> → #${esc(h.channel)} “${esc((h.content||'').slice(0,60))}”`).join(' · ');
+    if (!un.length) { b.className = 'attn'; b.innerHTML = ''; return; }
+    b.className = 'attn show';
+    b.innerHTML = `<div class="hd">${ICON('alert')}Unacked handoffs <span class="n" role="status" aria-atomic="true">${un.length} waiting</span></div>` +
+      un.map((h) => `<div class="arow" title="${esc(h.created_at || '')} UTC"><span class="age">${agoShort(h.created_at)}</span>` +
+        `<span class="txt"><span class="who">${esc(h.sender)}</span><span class="ch">→ #${esc(h.channel)}</span><span class="ex">${esc(h.content || '')}</span></span></div>`).join('');
   }
 
   function renderRoster(list) {
     instances = list;
     const active = list.filter((i) => i.status === 'online' || (Date.now() - tms(i.last_seen)) <= partWin());
     const show = showAllParts() ? list : active;
-    $('rcount').textContent = show.length + (showAllParts() ? '' : ' active');
-    rosterEl.innerHTML = show.length ? show.map((i) => {
+    $('rcount').textContent = show.length + ' / ' + list.length;
+    // grouped by host (the part of instance_id before '/'), in roster order within a host
+    const groups = new Map();
+    for (const i of show) { const h = (i.instance_id || '').split('/')[0] || '?'; if (!groups.has(h)) groups.set(h, []); groups.get(h).push(i); }
+    const rowHtml = (i) => {
       const off = i.status !== 'online';
       const stale = i.rev && leaderRev && i.rev !== leaderRev;
-      return `<div class="who ${off ? 'offline' : ''}" data-id="${esc(i.instance_id)}"><div class="row"><span class="pip"></span>` +
-        `<span class="id">${esc(i.instance_id)}</span>` +
-        `${stale ? `<span class="stale" title="This node runs ${esc(i.rev)}; the bus leader runs ${esc(leaderRev)}. Pull + re-arm to sync.">stale ${esc(i.rev)}</span>` : ''}</div>` +
-        `${i.description ? `<div class="desc">${esc(i.description)}</div>` : ''}` +
-        `<div class="desc">${esc(i.status)} · ${esc(agoTxt(i.last_seen) || i.last_seen)}${i.rev ? ' · ' + esc(i.rev) : ''}</div></div>`;
-    }).join('') : '<div class="empty">none active in the last ' + Math.round(partWin()/60000) + ' min</div>';
+      const detail = `${i.status} · ${agoTxt(i.last_seen) || i.last_seen || '—'}${i.rev ? ' · ' + i.rev : ''}`;
+      return `<div class="who ${off ? 'offline' : ''}" data-id="${esc(i.instance_id)}" title="${esc(i.instance_id)}&#10;${esc(i.description || '')}&#10;${esc(detail)}"><span class="pip"></span>` +
+        `<span class="id"><span class="nm">${esc(shortOf(i.instance_id))}</span>${stale ? `<span class="tag t-warn" title="This node runs ${esc(i.rev)}; the bus leader runs ${esc(leaderRev)}. Pull + re-arm to sync.">${ICON('git')}${esc(i.rev)}</span>` : ''}</span><span class="r">${esc(agoShort(i.last_seen))}</span>` +
+        `<span class="sub">${esc(i.description || detail)}</span></div>`;
+    };
+    rosterEl.innerHTML = show.length ? [...groups].map(([h, arr]) =>
+      `<div class="host">${ICON('git')}<span class="hn">${esc(h)}</span><span class="n">${arr.length}</span></div>` + arr.map(rowHtml).join('')).join('')
+      : '<div class="empty">none active in the last ' + Math.round(partWin()/60000) + ' min</div>';
+    if (!showAllParts() && list.length > show.length) rosterEl.innerHTML += `<div class="more">+ ${list.length - show.length} quiet for over ${Math.round(partWin()/60000)} min · “show all participants” is in settings</div>`;
     // click a participant → open/point at a DM channel to them
     [...rosterEl.querySelectorAll('.who')].forEach((el) => el.onclick = () => { $('chan').value = 'dm-' + shortOf(el.dataset.id); $('body').focus(); });
   }
@@ -329,25 +490,26 @@
       .sort((a, b) => (b.isNew - a.isNew) || (tms(b.last_message_at) - tms(a.last_message_at)));
     const inWin = rows.filter((c) => c.age <= chanWin() || c.isNew || c.name === filter);
     const show = showAllChans() ? rows : inWin;
-    $('ccount').textContent = show.length + (showAllChans() ? '' : ' active');
+    $('ccount').textContent = show.length + ' / ' + rows.length;
     // The compose-channel dropdown mirrors the VISIBLE channel list (same active-window /
     // "show all" filter as the sidebar). Fallback: when nothing is visible (all channels are
     // outside the active window and "show all channels" is off), offer every channel so the
     // dropdown is never uselessly empty.
     const dlSource = show.length ? show : rows;
     chanList.innerHTML = dlSource.map((c) => `<option value="${esc(c.name)}">`).join('');
-    const allRow = `<div class="chan ${filter===null?'sel':''}" data-ch=""><span class="n">＊ all channels</span></div>`;
+    const allRow = `<div class="chan ${filter===null?'sel':''}" data-ch="">${ICON('layers')}<span class="n">all channels</span><span class="c">${rows.reduce((s, c) => s + (c.message_count || 0), 0)}</span></div>`;
     chansEl.innerHTML = allRow + show.map((c) => {
       const off = c.age > chanWin() && !c.isNew && c.name !== filter;
-      return `<div class="chan ${filter===c.name?'sel':''} ${c.isNew?'newc':''} ${off?'offwin':''}" data-ch="${esc(c.name)}">` +
-        `${c.isNew ? '<span class="newdot"></span>' : ''}<span class="n">#${esc(c.name)}</span>` +
-        `<span class="c">${esc(agoTxt(c.last_message_at))} · ${c.message_count}</span></div>`;
+      return `<div class="chan ${filter===c.name?'sel':''} ${c.isNew?'newc':''} ${off?'offwin':''}" data-ch="${esc(c.name)}" title="#${esc(c.name)} — last message ${esc(agoTxt(c.last_message_at))}, ${c.message_count} total${c.isNew ? ', new since you last looked' : ''}">` +
+        `${c.isNew ? '<span class="newdot"></span>' : ICON('hash')}<span class="n">${esc(c.name)}</span>` +
+        `<span class="c">${esc(agoShort(c.last_message_at))} · ${c.message_count}</span></div>`;
     }).join('');
     if (!showAllChans() && rows.length > show.length) {
-      chansEl.innerHTML += `<div class="empty">+ ${rows.length - show.length} older (toggle “show all channels”)</div>`;
+      chansEl.innerHTML += `<div class="more">+ ${rows.length - show.length} older · “show all channels” is in settings</div>`;
     }
     [...chansEl.querySelectorAll('.chan')].forEach((el) => el.onclick = () => {
       filter = el.dataset.ch || null;
+      $('streamtitle').textContent = filter ? '#' + filter : 'all channels';
       if (filter) { const c = channels.find((x) => x.name === filter); if (c) { viewedAt[filter] = tms(c.last_message_at); saveViewed(); } }
       [...stream.children].forEach((m) => { if (m.dataset) m.style.display = (!filter || m.dataset.ch === filter) ? '' : 'none'; });
       renderChannels(channels);
@@ -365,48 +527,52 @@
   const isStale = (it) => (it.state==='claimed'||it.state==='implementing') && tms(it.updated_at) && (Date.now()-tms(it.updated_at) > WORK_STALE_MS);
   // glyph + label + colour-class per work state (mirrors the message .type badges).
   const WSTATE = {
-    queued:       { g:'◦', c:'queued',       cls:'s-queued' },
-    claimed:      { g:'◑', c:'claimed',      cls:'s-claimed' },
-    implementing: { g:'⚙', c:'implementing', cls:'s-impl' },
-    'in-review':  { g:'◎', c:'in-review',    cls:'s-review' },
-    merged:       { g:'✓', c:'merged',       cls:'s-merged' },
-    deployed:     { g:'⬆', c:'deployed',     cls:'s-deployed' },
-    blocked:      { g:'⛔', c:'blocked',      cls:'s-blocked' },
-    abandoned:    { g:'✕', c:'abandoned',    cls:'s-abandoned' },
+    queued:       { g:'circle', c:'queued',       cls:'s-queued' },
+    claimed:      { g:'half',   c:'claimed',      cls:'s-claimed' },
+    implementing: { g:'wrench', c:'implementing', cls:'s-impl' },
+    'in-review':  { g:'eye',    c:'in-review',    cls:'s-review' },
+    merged:       { g:'check',  c:'merged',       cls:'s-merged' },
+    deployed:     { g:'up',     c:'deployed',     cls:'s-deployed' },
+    blocked:      { g:'ban',    c:'blocked',      cls:'s-blocked' },
+    abandoned:    { g:'x',      c:'abandoned',    cls:'s-abandoned' },
   };
 
   function workRowHtml(it, depth) {
-    const st = WSTATE[it.state] || { g:'•', c:(it.state||'?'), cls:'' };
+    const st = WSTATE[it.state] || { g:'circle', c:(it.state||'?'), cls:'' };
     const blocked = it.state === 'blocked';
     const stale = isStale(it);
-    const owner = isFilledStr(it.owner) ? '@'+esc(it.owner) : '<span class="wb-unowned">unowned</span>';
+    const done = it.state === 'merged' || it.state === 'deployed';
+    const owner = isFilledStr(it.owner) ? esc(it.owner) : '<span class="wb-unowned">unowned</span>';
     const isEpic = it.kind === 'epic';
-    return `<div class="wb-item ${blocked?'blk':''} ${stale?'stl':''} ${isEpic?'epic':''} ${it.state==='abandoned'?'abn':''}" data-wid="${it.id}" style="--d:${depth}">` +
-      `<div class="wb-row">` +
-        `<span class="wb-id">#${it.id}</span>` +
-        `<span class="wb-badge ${st.cls}" title="state: ${esc(it.state||'?')}">${st.g} ${esc(st.c)}</span>` +
+    return `<div class="wb-item ${blocked?'blk':''} ${stale?'stl':''} ${isEpic?'epic':''} ${it.state==='abandoned'?'abn':''} ${done?'done':''}" data-wid="${it.id}" style="--d:${depth}">` +
+      `<span class="wb-id">#${it.id}</span>` +
+      `<span class="wb-g ${st.cls}" title="state: ${esc(it.state||'?')}">${ICON(st.g)}</span>` +
+      `<span class="wb-title" title="${esc(it.title)}">${esc(it.title)}</span>` +
+      `<span class="wb-r">` +
+        (stale ? `<span class="tag t-warn" title="In ${esc(it.state)} with no update for over ${Math.round(WORK_STALE_MS/60000)} min (claimed_at ${esc(it.claimed_at||'—')}). Possible stalled lane.">stalled</span>` : '') +
+        (blocked ? `<span class="tag t-bad">blocked</span>` : '') +
+        `<span class="wb-ago" data-ts="${esc(it.updated_at||'')}" title="updated ${esc(it.updated_at||'?')} UTC">${it.updated_at ? agoShort(it.updated_at) : ''}</span>` +
+      `</span>` +
+      `<span class="wb-sub"><span class="wb-state ${st.cls}">${esc(st.c)}</span>` +
         (isFilledStr(it.kind) ? `<span class="wb-kind">${esc(it.kind)}</span>` : '') +
-        `<span class="wb-title">${esc(it.title)}</span>` +
-        `<span class="wb-ago" data-ts="${esc(it.updated_at||'')}" title="updated ${esc(it.updated_at||'?')} UTC">${it.updated_at ? ('updated '+agoShort(it.updated_at)+' ago') : ''}</span>` +
-      `</div>` +
-      `<div class="wb-sub">` +
         `<span class="wb-owner">${owner}</span>` +
-        (isFilledStr(it.domain) ? `<span class="wb-tag wb-domain">${esc(it.domain)}</span>` : '') +
+        (isFilledStr(it.domain) ? `<span class="wb-tag">${esc(it.domain)}</span>` : '') +
         (isFilledStr(it.external_ref) ? `<span class="wb-tag wb-ref">${esc(it.external_ref)}</span>` : '') +
-        (stale ? `<span class="wb-chip stl" title="In ${esc(it.state)} with no update for over ${Math.round(WORK_STALE_MS/60000)} min (claimed_at ${esc(it.claimed_at||'—')}). Possible stalled lane.">stalled</span>` : '') +
-        (blocked ? `<span class="wb-chip blk">blocked</span>` : '') +
-      `</div>` +
+      `</span>` +
     `</div>`;
   }
 
+  // Summary = a proportional state bar + legend (colour AND count/label, never colour alone).
+  const WORDER = [['merged','s-merged'],['deployed','s-deployed'],['in-review','s-review'],['implementing','s-impl'],['claimed','s-claimed'],['queued','s-queued'],['blocked','s-blocked'],['abandoned','s-abandoned']];
   function renderWorkSummary(items) {
     const c = {}; for (const it of items) c[it.state] = (c[it.state]||0) + 1;
     let stalled = 0; for (const it of items) if (isStale(it)) stalled++;
-    const parts = [items.length + ' item' + (items.length===1?'':'s')];
-    const add = (n, label) => { if (c[n]) parts.push(c[n] + ' ' + label); };
-    add('implementing','implementing'); add('in-review','in-review'); add('blocked','blocked'); add('queued','queued');
-    if (stalled) parts.push(stalled + ' stalled');
-    $('wbsummary').textContent = parts.join(' · ');
+    const total = items.length || 1;
+    const present = WORDER.filter(([s]) => c[s]);
+    const bar = present.map(([s, cls]) => `<i class="${cls}" style="width:${(c[s]/total*100).toFixed(1)}%" title="${c[s]} ${s}"></i>`).join('');
+    const legend = present.map(([s, cls]) => `<span><i class="k ${cls}"></i>${c[s]} ${s}</span>`).join('') +
+      (stalled ? `<span class="warn"><i class="k s-stale"></i>${stalled} stalled</span>` : '');
+    $('wbsummary').innerHTML = `<div class="bar" title="${items.length} item${items.length===1?'':'s'}">${bar}</div><div class="legend">${legend}</div>`;
   }
 
   // Rebuild the board from the reconciled map. Grouped by epic: an item with no parent (or whose
@@ -444,7 +610,7 @@
   // Cheap per-poll tick of the relative "updated Ns ago" labels without a full rebuild.
   function refreshWorkAgos() {
     for (const el of $('wboard').querySelectorAll('.wb-ago')) {
-      const ts = el.dataset.ts; if (ts) el.textContent = 'updated ' + agoShort(ts) + ' ago';
+      const ts = el.dataset.ts; if (ts) el.textContent = agoShort(ts);
     }
   }
 
@@ -491,7 +657,7 @@
       renderBanner();
       firstChannels = false;
       pollFails = 0;
-      setOK(true, `live · ${channels.length} ch${leaderRev ? ' · rev ' + leaderRev : ''}`);
+      setOK(true, `live · ${channels.length} ch`);
       pollWork(); // read-only work board — self-contained, quiet on error
     } catch (e) {
       pollFails++;
@@ -500,7 +666,7 @@
       if (pollFails >= 3) {
         const found = await discoverLeader();
         if (found && found.base !== base()) {
-          setOK(false, 'leader moved → following ' + found.host);
+          setOK(false, 'leader moved → following ' + found.host); toast('Leader moved to ' + found.host + ' — resumed');
           pointAt(found.base); pollFails = 0; poll(); return;
         }
       }
@@ -596,6 +762,17 @@
     if ($('showBoard').checked && ok) pollWork(); // populate immediately on show
   });
   $('peers').addEventListener('change', save);
+  // ---- chrome: settings popover, status chip, board button, theme (display-only) -------------
+  $('gear').onclick = () => { const s = $('settings'); s.hidden = !s.hidden; $('gear').classList.toggle('on', !s.hidden); };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('settings').hidden) { $('settings').hidden = true; $('gear').classList.remove('on'); } });
+  $('chip').onclick = () => { const f = $('connform'); f.hidden = !f.hidden; formPinned = !f.hidden; if (!f.hidden) $('base').focus(); };
+  const syncBoardBtn = () => $('boardBtn').classList.toggle('on', $('showBoard').checked);
+  $('boardBtn').onclick = () => { $('showBoard').checked = !$('showBoard').checked; $('showBoard').dispatchEvent(new Event('change')); };
+  $('showBoard').addEventListener('change', syncBoardBtn); syncBoardBtn();
+  const THEME = LS + '.theme';
+  const applyTheme = (t) => { document.documentElement.setAttribute('data-theme', t); $('theme').title = t === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'; };
+  applyTheme(localStorage.getItem(THEME) || 'dark');
+  $('theme').onclick = () => { const t = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; localStorage.setItem(THEME, t); applyTheme(t); };
   // auto-connect only when a token is already stored (avoids a 401 flash on a first-ever open)
   if (base() && $('token').value.trim()) start(); else setOK(false, 'set token');
 </script>

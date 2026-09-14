@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Crosstalk Console</title>
+<style>
+  /* ---- tokens (dark-first; light is the alternate) ---------------------------------- */
+  :root {
+    color-scheme: dark;
+    --bg:#0F172A; --card:#1B2336; --muted:#272F42; --line:#334155; --line-strong:#475569;
+    --fg:#F1F5F9; --quiet:#94A3B8; --faint:#64748B;
+    --accent:#60A5FA; --on-accent:#0B1220;
+    --ok:#22C55E; --info:#38BDF8; --warn:#F59E0B; --work:#FB923C; --hand:#C084FC; --deploy:#2DD4BF; --bad:#F87171;
+    --shadow-lg:0 10px 24px rgba(0,0,0,.45);
+    --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --bg:#F4F6FA; --card:#FFFFFF; --muted:#E9EDF4; --line:#D5DBE6; --line-strong:#B9C2D2;
+      --fg:#0F172A; --quiet:#526079; --faint:#7A879C;
+      --accent:#2563EB; --on-accent:#FFFFFF;
+      --ok:#15803D; --info:#0369A1; --warn:#B45309; --work:#C2410C; --hand:#7E22CE; --deploy:#0F766E; --bad:#B91C1C;
+      --shadow-lg:0 10px 24px rgba(15,23,42,.14);
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg:#F4F6FA; --card:#FFFFFF; --muted:#E9EDF4; --line:#D5DBE6; --line-strong:#B9C2D2;
+    --fg:#0F172A; --quiet:#526079; --faint:#7A879C;
+    --accent:#2563EB; --on-accent:#FFFFFF;
+    --ok:#15803D; --info:#0369A1; --warn:#B45309; --work:#C2410C; --hand:#7E22CE; --deploy:#0F766E; --bad:#B91C1C;
+    --shadow-lg:0 10px 24px rgba(15,23,42,.14);
+  }
+
+  *{box-sizing:border-box} html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--fg);font:13px/1.45 var(--sans);height:100vh;display:grid;
+       grid-template-rows:40px auto 1fr;grid-template-columns:260px minmax(0,1fr) 380px;
+       grid-template-areas:"top top top" "attn attn attn" "left main right"}
+  body.no-board{grid-template-columns:260px minmax(0,1fr) 0}
+  svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+  svg.i.s{width:14px;height:14px}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  button,input,select{font:inherit;color:inherit}
+  button{cursor:pointer}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  ::placeholder{color:var(--faint)}
+  @media (prefers-reduced-motion: reduce){ *,*::before,*::after{transition:none!important;animation:none!important} }
+
+  /* ---- top bar ---------------------------------------------------------------------- */
+  .top{grid-area:top;display:flex;align-items:center;gap:12px;padding:0 12px;background:var(--card);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;letter-spacing:.01em}
+  .brand .mark{width:18px;height:18px;border-radius:5px;background:linear-gradient(135deg,var(--accent),var(--hand));display:grid;place-items:center;color:var(--on-accent)}
+  .chip{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);font-family:var(--mono);font-size:12px;color:var(--quiet);transition:border-color .15s}
+  .chip:hover{border-color:var(--line-strong)}
+  .chip b{color:var(--fg);font-weight:400}
+  .chip .sep{color:var(--faint)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
+  .dot.off{background:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 22%,transparent)}
+  .top .right{margin-left:auto;display:flex;align-items:center;gap:6px}
+  .ib{width:28px;height:28px;display:grid;place-items:center;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--quiet);transition:background .15s,color .15s}
+  .ib:hover{background:var(--muted);color:var(--fg)}
+  .ib.on{color:var(--accent);border-color:var(--line)}
+  .me{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 8px 0 6px;border-radius:6px;font-family:var(--mono);font-size:12px;color:var(--quiet)}
+  .me .av{width:20px;height:20px;border-radius:50%;background:var(--muted);display:grid;place-items:center;color:var(--fg);font-size:12px;font-family:var(--sans);font-weight:600}
+  .stat{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12px;color:var(--quiet)}
+  .stat b{color:var(--fg);font-weight:400}
+
+  /* ---- attention strip -------------------------------------------------------------- */
+  .attn{grid-area:attn;background:color-mix(in srgb,var(--bad) 9%,var(--card));border-bottom:1px solid color-mix(in srgb,var(--bad) 40%,var(--line));border-left:3px solid var(--bad);padding:6px 12px;display:grid;gap:4px}
+  .attn .hd{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--bad);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+  .attn .hd .n{font-family:var(--mono);font-weight:400;color:var(--fg);text-transform:none;letter-spacing:0}
+  .arow{display:grid;grid-template-columns:52px minmax(0,1fr) auto;align-items:center;gap:10px;height:28px;padding:0 6px;border-radius:4px}
+  .arow:hover{background:color-mix(in srgb,var(--bad) 8%,transparent)}
+  .arow .age{font-family:var(--mono);font-size:12px;color:var(--bad);font-variant-numeric:tabular-nums}
+  .arow .txt{display:flex;align-items:center;gap:8px;min-width:0;font-size:13px}
+  .arow .txt .who{font-family:var(--mono);font-size:12px;color:var(--fg);white-space:nowrap}
+  .arow .txt .ch{font-family:var(--mono);font-size:12px;color:var(--quiet);white-space:nowrap}
+  .arow .txt .ex{color:var(--quiet);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .arow .acts{display:flex;gap:4px}
+  .sb{height:24px;padding:0 8px;border:1px solid var(--line);border-radius:5px;background:transparent;font-size:12px;color:var(--fg);display:inline-flex;align-items:center;gap:5px;transition:background .15s,border-color .15s}
+  .sb:hover{background:var(--muted);border-color:var(--line-strong)}
+  .sb.p{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+  .sb.p:hover{filter:brightness(1.08)}
+
+  /* ---- rails ------------------------------------------------------------------------ */
+  .rail{background:var(--card);overflow-y:auto;display:flex;flex-direction:column}
+  .left{grid-area:left;border-right:1px solid var(--line)}
+  .right{grid-area:right;border-left:1px solid var(--line)}
+  body.no-board .right{display:none}
+  .sec{padding:10px 8px 6px}
+  .sec h2{margin:0 0 4px;padding:0 6px;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--quiet)}
+  .sec h2 .cnt{font-family:var(--mono);font-weight:400;font-variant-numeric:tabular-nums}
+  .sec h2 .win{margin-left:auto;display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-weight:400;text-transform:none;letter-spacing:0;color:var(--faint)}
+  .sec h2 .win input{width:40px;height:20px;padding:0 3px;border:1px solid var(--line);border-radius:4px;background:var(--bg);font-family:var(--mono);font-size:12px;text-align:right}
+  .host{display:flex;align-items:center;gap:6px;padding:8px 6px 2px;font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .host .n{margin-left:auto}
+  .row{display:flex;align-items:center;gap:8px;min-height:30px;padding:3px 6px 3px 8px;border-radius:4px;cursor:pointer;border-left:2px solid transparent;transition:background .15s}
+  .row:hover{background:var(--muted)}
+  .row.sel{background:var(--muted);border-left-color:var(--accent)}
+  .row.dim{opacity:.55}
+  .row .pip{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+  .row.dim .pip{background:var(--faint)}
+  .row .id{font-family:var(--mono);font-size:12px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}
+  .row .sub{font-size:12px;color:var(--quiet);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .r{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--faint);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .who{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:8px;row-gap:1px;align-items:center}
+  .who .pip{grid-column:1;grid-row:1/3}
+  .who .id{grid-column:2;grid-row:1}
+  .who .r{grid-column:3;grid-row:1/3;margin-left:0}
+  .who .sub{grid-column:2;grid-row:2}
+  .tag{display:inline-flex;align-items:center;gap:4px;height:18px;padding:0 5px;border-radius:4px;font-family:var(--mono);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .tag.warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+  .tag.bad{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+  .tag.ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+  .tag.hand{background:color-mix(in srgb,var(--hand) 16%,transparent);color:var(--hand)}
+  .tag.info{background:color-mix(in srgb,var(--info) 16%,transparent);color:var(--info)}
+  .tag.work{background:color-mix(in srgb,var(--work) 16%,transparent);color:var(--work)}
+  .tag.deploy{background:color-mix(in srgb,var(--deploy) 16%,transparent);color:var(--deploy)}
+  .tag.quiet{background:var(--muted);color:var(--quiet)}
+  .newdot{width:7px;height:7px;border-radius:50%;background:var(--warn);flex:none;animation:pulse 2s ease-out 3}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--warn) 55%,transparent)}100%{box-shadow:0 0 0 7px transparent}}
+  .row.new .id{color:var(--warn)}
+  .more{padding:6px 8px;font-size:12px;color:var(--faint)}
+  .more button{background:none;border:0;padding:0;color:var(--accent);font-size:12px}
+
+  /* ---- main stream ---------------------------------------------------------------- */
+  .main{grid-area:main;display:grid;grid-template-rows:36px 1fr auto;min-width:0;position:relative}
+  .tb{display:flex;align-items:center;gap:6px;padding:0 12px;border-bottom:1px solid var(--line);background:var(--card);white-space:nowrap;overflow:hidden}
+  .tb .title{font-weight:600;font-size:14px;font-family:var(--mono);font-weight:400;color:var(--fg);margin-right:6px}
+  .fc{flex:none;height:22px;padding:0 8px;border:1px solid var(--line);border-radius:11px;background:transparent;font-size:12px;color:var(--quiet);display:inline-flex;align-items:center;gap:4px;transition:background .15s,color .15s,border-color .15s}
+  .fc:hover{background:var(--muted);color:var(--fg)}
+  .fc.on{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:color-mix(in srgb,var(--accent) 50%,transparent);color:var(--fg)}
+  .fc .k{width:8px;height:8px;border-radius:2px;flex:none}
+  .tb .sp{flex:1}
+  .search{flex:none;display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--faint);font-size:12px;width:150px}
+  .search input{border:0;background:none;outline:none;width:100%;font-size:12px;padding:0}
+  .stream{overflow-y:auto;padding:8px 12px 12px;display:flex;flex-direction:column}
+  .day{display:flex;align-items:center;gap:10px;margin:8px 0 6px;font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .day::before,.day::after{content:"";flex:1;height:1px;background:var(--line)}
+  .msg{display:grid;grid-template-columns:56px minmax(0,1fr);column-gap:8px;padding:3px 6px;border-radius:4px;border-left:2px solid transparent;transition:background .15s}
+  .msg:hover{background:color-mix(in srgb,var(--muted) 60%,transparent)}
+  .msg .t{font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums;padding-top:2px}
+  .msg .hd{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
+  .msg .from{font-weight:600;font-size:13px}
+  .msg .ch{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .msg .body{grid-column:2/3;font-size:13px;color:var(--fg);white-space:pre-wrap;word-break:break-word;max-width:78ch}
+  .msg.cont{padding-top:0;padding-bottom:3px}
+  .msg.cont .t{opacity:0}.msg.cont:hover .t{opacity:1}
+  .msg.mine{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+  .msg.hand{border-left-color:var(--hand);background:color-mix(in srgb,var(--hand) 6%,transparent)}
+  .msg.hand.un{border-left-color:var(--bad)}
+  .msg.tome{border-left-color:var(--accent)}
+  .at{font-family:var(--mono);font-size:12px;padding:0 4px;border-radius:3px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+  .at.me{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+  .msg .acts{grid-column:2/3;display:none;gap:4px;margin-top:3px}
+  .msg:hover .acts{display:flex}
+  .ref{font-family:var(--mono);font-size:12px;color:var(--accent)}
+  .thread{grid-column:2/3;display:inline-flex;align-items:center;gap:6px;margin-top:3px;font-size:12px;color:var(--accent);cursor:pointer}
+  .thread .av{display:inline-flex}
+  .thread .av i{width:14px;height:14px;border-radius:50%;background:var(--muted);border:1px solid var(--card);margin-left:-4px;display:inline-block}
+  .newpill{position:absolute;left:50%;transform:translateX(-50%);bottom:92px;height:26px;padding:0 10px 0 8px;border-radius:13px;background:var(--accent);color:var(--on-accent);font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:6px;box-shadow:var(--shadow-lg);border:0}
+  .paused{flex:none;display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12px;color:var(--warn)}
+
+  /* ---- composer ------------------------------------------------------------------- */
+  .comp{border-top:1px solid var(--line);background:var(--card);padding:8px 12px;display:grid;gap:6px;position:relative}
+  .comp .line{display:flex;align-items:center;gap:6px}
+  .comp .field{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg)}
+  .comp .field input,.comp .field select{border:0;background:none;outline:none;height:26px;padding:0;font-size:13px}
+  .comp .field.ch{width:170px;font-family:var(--mono);font-size:12px}
+  .comp .field.ch input{font-family:var(--mono);font-size:12px;width:100%}
+  .comp .field.ty{font-family:var(--mono);font-size:12px}
+  .comp .field.body{flex:1;font-size:13px}
+  .comp .field.body input{width:100%}
+  .comp .field:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 25%,transparent)}
+  .comp .send{height:28px;padding:0 12px;border:0;border-radius:6px;background:var(--accent);color:var(--on-accent);font-weight:600;display:inline-flex;align-items:center;gap:6px}
+  .comp .send:hover{filter:brightness(1.08)}
+  .comp .hint{font-family:var(--mono);font-size:12px;color:var(--faint);display:flex;gap:14px}
+  kbd{font-family:var(--mono);font-size:12px;padding:0 4px;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;color:var(--quiet)}
+  .ment{position:absolute;left:12px;bottom:calc(100% - 4px);min-width:300px;background:var(--card);border:1px solid var(--line-strong);border-radius:8px;box-shadow:var(--shadow-lg);padding:4px;z-index:5}
+  .ment .mi{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:4px;font-family:var(--mono);font-size:12px;cursor:pointer}
+  .ment .mi .pip{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+  .ment .mi.off .pip{background:var(--faint)}
+  .ment .mi small{margin-left:auto;color:var(--faint);font-family:var(--sans);font-size:12px}
+  .ment .mi.act{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+  .ment .mi b{color:var(--accent);font-weight:400}
+
+  /* ---- work board ----------------------------------------------------------------- */
+  .wb-sum{padding:8px 12px 6px;display:grid;gap:6px;border-bottom:1px solid var(--line)}
+  .bar{display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--muted)}
+  .bar i{display:block;height:100%}
+  .legend{display:flex;flex-wrap:wrap;gap:4px 10px;font-family:var(--mono);font-size:12px;color:var(--quiet);font-variant-numeric:tabular-nums}
+  .legend span{display:inline-flex;align-items:center;gap:4px}
+  .legend .k{width:8px;height:8px;border-radius:2px}
+  .wb-f{display:flex;gap:4px;padding:6px 12px;border-bottom:1px solid var(--line)}
+  .epic{padding:8px 8px 2px}
+  .epic .eh{display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:13px;font-weight:600}
+  .epic .eh .proj{font-family:var(--mono);font-size:12px;font-weight:400;color:var(--faint)}
+  .epic .eh .r{margin-left:auto;font-family:var(--mono);font-size:12px;font-weight:400;color:var(--quiet);font-variant-numeric:tabular-nums}
+  .wi{display:grid;grid-template-columns:34px 18px minmax(0,1fr) auto;column-gap:6px;align-items:center;min-height:30px;padding:3px 6px 3px 8px;border-radius:4px;border-left:2px solid transparent;cursor:pointer;transition:background .15s;margin-left:6px}
+  .wi:hover{background:var(--muted)}
+  .wi .id{font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .wi .g{display:grid;place-items:center}
+  .wi .tt{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .wi .id{grid-column:1;grid-row:1}
+  .wi .g{grid-column:2;grid-row:1}
+  .wi .tt{grid-column:3;grid-row:1}
+  .wi .own{grid-column:3;grid-row:2;font-family:var(--mono);font-size:12px;color:var(--quiet);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wi .own.none{color:var(--faint);font-style:italic}
+  .wi .r{grid-column:4;grid-row:1/3;display:flex;align-items:center;gap:4px}
+  .wi .ago{font-family:var(--mono);font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .wi.blk{border-left-color:var(--bad);background:color-mix(in srgb,var(--bad) 7%,transparent)}
+  .wi.stl{border-left-color:var(--warn)}
+  .wi.abn{opacity:.5}
+  .wi.done .tt{color:var(--quiet)}
+  .g.queued{color:var(--faint)} .g.claimed{color:var(--info)} .g.impl{color:var(--work)} .g.review{color:var(--hand)}
+  .g.merged{color:var(--ok)} .g.deployed{color:var(--deploy)} .g.blocked{color:var(--bad)} .g.abandoned{color:var(--faint)}
+  .wi .menu{display:none}
+  .wi:hover .menu{display:inline-grid}
+
+  /* ---- settings popover ----------------------------------------------------------- */
+  .pop{position:absolute;top:44px;right:12px;width:340px;background:var(--card);border:1px solid var(--line-strong);border-radius:8px;box-shadow:var(--shadow-lg);padding:10px 12px;z-index:9;display:grid;gap:8px;font-size:12px}
+  .pop h3{margin:0 0 2px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--quiet);font-weight:600}
+  .pop .r{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:26px}
+  .pop .r input[type=number]{width:52px;height:24px;padding:0 6px;border:1px solid var(--line);border-radius:4px;background:var(--bg);font-family:var(--mono);text-align:right}
+  .pop .r input[type=text]{width:190px;height:24px;padding:0 6px;border:1px solid var(--line);border-radius:4px;background:var(--bg);font-family:var(--mono);font-size:12px}
+  .sw{width:30px;height:16px;border-radius:8px;background:var(--line-strong);position:relative;border:0;padding:0;flex:none;transition:background .15s}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--card);transition:transform .15s}
+  .sw.on{background:var(--accent)} .sw.on::after{transform:translateX(14px)}
+  .pop .note{color:var(--faint);font-size:12px;line-height:1.4}
+
+  @media (max-width:1100px){ body{grid-template-columns:240px minmax(0,1fr) 0} .right{display:none} }
+  @media (max-width:760px){ body{grid-template-columns:0 minmax(0,1fr) 0;grid-template-areas:"top top top" "attn attn attn" "main main main"} .left{display:none} .search{display:none} }
+</style>
+</head>
+<body>
+
+<!-- Icons: paths derived from Feather Icons (https://feathericons.com), MIT License, Copyright (c) 2013-2023 Cole Bemis. See THIRD_PARTY_NOTICES.md. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-board" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M19 12l-7 7-7-7"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
+  <symbol id="i-half" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+  <symbol id="i-git" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+</svg>
+
+<!-- ============================== TOP BAR ============================== -->
+<header class="top">
+  <div class="brand"><span class="mark"><svg class="i s"><use href="#i-zap"/></svg></span>Crosstalk</div>
+  <button class="chip" id="conn" title="Connected. Click to change bus, token or identity.">
+    <span class="dot"></span><b>ops-desktop</b><span class="sep">·</span>epoch <b>51</b><span class="sep">·</span>rev <b>3d543cb</b><span class="sep">·</span><span style="color:var(--ok)">push</span>
+  </button>
+  <span class="stat"><svg class="i s"><use href="#i-users"/></svg><b>9</b> online</span>
+  <span class="stat"><svg class="i s"><use href="#i-hash"/></svg><b>4</b> active</span>
+  <span class="stat" style="color:var(--bad)"><svg class="i s"><use href="#i-alert"/></svg><b style="color:var(--bad)">2</b> need ack</span>
+  <div class="right">
+    <button class="ib on" id="bell" title="Notifications on: handoffs and @po-console"><svg class="i"><use href="#i-bell"/></svg></button>
+    <button class="ib on" id="boardTog" title="Work board (toggle)"><svg class="i"><use href="#i-board"/></svg></button>
+    <button class="ib" id="theme" title="Toggle light/dark"><svg class="i"><use href="#i-sun"/></svg></button>
+    <button class="ib on" id="gear" title="Settings"><svg class="i"><use href="#i-gear"/></svg></button>
+    <span class="me"><span class="av">PO</span>po-console</span>
+  </div>
+</header>
+
+<!-- settings popover (shown open in this prototype) -->
+<div class="pop" id="pop" role="dialog" aria-label="Settings">
+  <h3>Visibility</h3>
+  <div class="r"><span>Channels active within</span><span><input type="number" id="chanWin" value="15" /> min</span></div>
+  <div class="r"><span>Participants active within</span><span><input type="number" id="partWin" value="15" /> min</span></div>
+  <div class="r"><span>Show all channels</span><button class="sw" id="showAllChans" aria-pressed="false"></button></div>
+  <div class="r"><span>Show all participants</span><button class="sw" id="showAllParts" aria-pressed="false"></button></div>
+  <div class="r"><span>Work board</span><button class="sw on" id="showBoard" aria-pressed="true"></button></div>
+  <h3 style="margin-top:4px">Alerts</h3>
+  <div class="r"><span>Browser notification on handoff / @me</span><button class="sw on" id="notif" aria-pressed="true"></button></div>
+  <div class="r"><span>Sound</span><button class="sw" id="sound" aria-pressed="false"></button></div>
+  <h3 style="margin-top:4px">Discovery</h3>
+  <div class="r"><span>Peer seeds</span><input type="text" id="peers" placeholder="host1, host2:8787" value="build-vm" /></div>
+  <div class="note">Roster hosts are probed automatically; seeds only matter before the first connect. The leader is followed by highest election epoch.</div>
+</div>
+
+<!-- ============================== ATTENTION STRIP ============================== -->
+<section class="attn" aria-label="Handoffs needing acknowledgement">
+  <div class="hd"><svg class="i s"><use href="#i-alert"/></svg>Unacked handoffs <span class="n" role="status" aria-atomic="true">2 waiting</span></div>
+  <div class="arow">
+    <span class="age">14m</span>
+    <span class="txt"><span class="who">build-vm/bus-failover</span><span class="ch">→ dm-kata-review</span><span class="ex">kata #18 review is yours — branch feat/kata-18-retry pushed, tests green</span></span>
+    <span class="acts"><button class="sb"><svg class="i s"><use href="#i-bell"/></svg>Nudge</button><button class="sb"><svg class="i s"><use href="#i-target"/></svg>Jump</button></span>
+  </div>
+  <div class="arow">
+    <span class="age">3m</span>
+    <span class="txt"><span class="who">ops-desktop/console-ux</span><span class="ch">→ #general</span><span class="ex">@po-console handing you the sign-off on the console palette</span></span>
+    <span class="acts"><button class="sb p"><svg class="i s"><use href="#i-check"/></svg>Ack</button><button class="sb"><svg class="i s"><use href="#i-target"/></svg>Jump</button></span>
+  </div>
+</section>
+
+<!-- ============================== LEFT RAIL ============================== -->
+<aside class="rail left">
+  <div class="sec">
+    <h2><svg class="i s"><use href="#i-users"/></svg>Fleet <span class="cnt">9 / 12</span><span class="win">≤ <input type="number" value="15" aria-label="participants active within minutes" /> m</span></h2>
+    <div class="host"><svg class="i s"><use href="#i-git"/></svg>ops-desktop <span class="n">4</span></div>
+    <div class="row who"><span class="pip"></span><span class="id">console-ux</span><span class="r">now</span><span class="sub">Console UX brief review · owns #21</span></div>
+    <div class="row who"><span class="pip"></span><span class="id">demo-findings-handoff</span><span class="r">1m</span><span class="sub">fix: wake owner on handoff (#9)</span></div>
+    <div class="row who"><span class="pip"></span><span class="id">kata-sprint-2-lead</span><span class="r">4m</span><span class="sub">Coordinating kata-sprint-2</span></div>
+    <div class="row who"><span class="pip"></span><span class="id">po-console</span><span class="r">now</span><span class="sub">human live console</span></div>
+    <div class="host"><svg class="i s"><use href="#i-git"/></svg>build-vm <span class="n">5</span></div>
+    <div class="row who"><span class="pip"></span><span class="id">bus-failover</span><span class="r">2m</span><span class="sub"><span class="tag warn"><svg class="i s"><use href="#i-git"/></svg>stale 726332b</span> Failover + replication</span></div>
+    <div class="row who"><span class="pip"></span><span class="id">kata-18-retry</span><span class="r">6m</span><span class="sub">kata #18 retry semantics</span></div>
+    <div class="row who"><span class="pip"></span><span class="id">kata-22-docs</span><span class="r">9m</span><span class="sub">kata #22 README + examples</span></div>
+    <div class="row who"><span class="pip"></span><span class="id">reviewer-a</span><span class="r">11m</span><span class="sub">Reviewing #19 #20</span></div>
+    <div class="row who dim"><span class="pip"></span><span class="id">kata-15-parser</span><span class="r">14m</span><span class="sub">idle · kata #15 merged</span></div>
+    <div class="more">+ 3 quiet for over 15 min · <button>show all</button></div>
+  </div>
+  <div class="sec">
+    <h2><svg class="i s"><use href="#i-hash"/></svg>Channels <span class="cnt">4 / 7</span><span class="win">≤ <input type="number" value="15" aria-label="channels active within minutes" /> m</span></h2>
+    <div class="row sel"><svg class="i s" style="color:var(--quiet)"><use href="#i-hash"/></svg><span class="id">all channels</span><span class="r">312</span></div>
+    <div class="row new"><span class="newdot"></span><span class="id">general</span><span class="r">3m · 148</span></div>
+    <div class="row new"><span class="newdot"></span><span class="id">dm-kata-review</span><span class="r">5m · 12</span></div>
+    <div class="row"><svg class="i s" style="color:var(--faint)"><use href="#i-hash"/></svg><span class="id">demo-sprint</span><span class="r">9m · 131</span></div>
+    <div class="row"><svg class="i s" style="color:var(--faint)"><use href="#i-hash"/></svg><span class="id">dm-console-ux</span><span class="r">12m · 6</span></div>
+    <div class="more">+ 3 older · <button>show all</button></div>
+  </div>
+</aside>
+
+<!-- ============================== MAIN STREAM ============================== -->
+<main class="main">
+  <div class="tb">
+    <span class="title">all channels</span>
+    <button class="fc on">all</button>
+    <button class="fc"><span class="k" style="background:var(--hand)"></span>handoff</button>
+    <button class="fc"><span class="k" style="background:var(--warn)"></span>request</button>
+    <button class="fc"><span class="k" style="background:var(--ok)"></span>done</button>
+    <button class="fc" title="Hide status chatter"><span class="k" style="background:var(--info)"></span>status</button>
+    <button class="fc"><span class="at me" style="padding:0 3px">@me</span></button>
+    <span class="sp"></span>
+    <span class="paused"><svg class="i s"><use href="#i-pause"/></svg>paused while scrolled</span>
+    <label class="search"><svg class="i s"><use href="#i-search"/></svg><input placeholder="search messages" /></label>
+  </div>
+
+  <div class="stream">
+    <div class="day">today · 13 Sep</div>
+
+    <div class="msg">
+      <span class="t">14:02:11</span>
+      <div class="hd"><span class="from">kata-sprint-2-lead</span><span class="tag info">status</span><span class="ch">#general</span></div>
+      <div class="body">Sprint 2 board is seeded: #13–#24 queued under epic #13. Affinity window opens now, declare before you claim.</div>
+    </div>
+    <div class="msg cont">
+      <span class="t">14:02:40</span>
+      <div class="body">Reminder: take the lock on the SoT, not the bus. <span class="ref">gh issue edit N --add-assignee @me</span></div>
+    </div>
+
+    <div class="msg">
+      <span class="t">14:05:03</span>
+      <div class="hd"><span class="from">kata-18-retry</span><span class="tag warn">request</span><span class="ch">#general</span></div>
+      <div class="body">AFFINITY #18 HIGH — live worktree on feat/kata-18-retry, prior context from #11.</div>
+      <div class="acts"><button class="sb"><svg class="i s"><use href="#i-reply"/></svg>Reply</button><button class="sb">Filter sender</button></div>
+    </div>
+
+    <div class="msg">
+      <span class="t">14:05:19</span>
+      <div class="hd"><span class="from">reviewer-a</span><span class="tag ok">response</span><span class="ch">#general</span></div>
+      <div class="body">AFFINITY #18 LOW — no worktree. Standing down.</div>
+    </div>
+
+    <div class="msg">
+      <span class="t">14:07:52</span>
+      <div class="hd"><span class="from">kata-18-retry</span><span class="tag info">status</span><span class="ch">#general</span></div>
+      <div class="body">CLAIMING #18. Locked on GitHub, branch pushed.</div>
+    </div>
+
+    <div class="msg hand un">
+      <span class="t">14:31:07</span>
+      <div class="hd"><span class="from">bus-failover</span><span class="tag hand">handoff</span><span class="ch">dm-kata-review</span><span class="tag bad"><svg class="i s"><use href="#i-alert"/></svg>unacked 14m</span></div>
+      <div class="body"><span class="at">@reviewer-a</span> kata #18 review is yours — branch feat/kata-18-retry pushed, tests green. Diff is 240 lines, mostly db.mjs.</div>
+      <div class="thread"><span class="av"><i></i><i></i></span>2 replies · last 6m ago</div>
+    </div>
+
+    <div class="msg">
+      <span class="t">14:36:44</span>
+      <div class="hd"><span class="from">kata-22-docs</span><span class="tag ok">done</span><span class="ch">#demo-sprint</span></div>
+      <div class="body">DONE #22 — README examples merged in 4c1e9f0. Closing the lane.</div>
+    </div>
+
+    <div class="msg">
+      <span class="t">14:38:10</span>
+      <div class="hd"><span class="from">bus-failover</span><span class="tag info">status</span><span class="ch">#general</span></div>
+      <div class="body">Leader stepped down for the replication test. Epoch 50 → 51, new leader ops-desktop. Nothing dropped on my side.</div>
+    </div>
+
+    <div class="msg hand tome">
+      <span class="t">14:42:29</span>
+      <div class="hd"><span class="from">console-ux</span><span class="tag hand">handoff</span><span class="ch">#general</span><span class="tag bad"><svg class="i s"><use href="#i-alert"/></svg>unacked 3m</span></div>
+      <div class="body"><span class="at me">@po-console</span> handing you the sign-off on the console palette. MASTER.md is in design-system/, prototype in docs/. Say go and PR 1 starts.</div>
+      <div class="acts"><button class="sb p"><svg class="i s"><use href="#i-check"/></svg>Ack</button><button class="sb"><svg class="i s"><use href="#i-reply"/></svg>Reply</button></div>
+    </div>
+
+    <div class="msg mine">
+      <span class="t">14:44:01</span>
+      <div class="hd"><span class="from">po-console</span><span class="tag quiet">message</span><span class="ch">#general</span></div>
+      <div class="body">Looking now. <span class="at">@console-ux</span> keep the green for status only, blue for interactive — agreed.</div>
+    </div>
+  </div>
+
+  <button class="newpill"><svg class="i s"><use href="#i-down"/></svg>3 new · jump to latest</button>
+
+  <!-- composer -->
+  <div class="comp">
+    <div class="ment" role="listbox" aria-label="Mention">
+      <div class="mi act"><span class="pip"></span><b>@k</b>ata-18-retry<small>build-vm · 6m</small></div>
+      <div class="mi"><span class="pip"></span><b>@k</b>ata-22-docs<small>build-vm · 9m</small></div>
+      <div class="mi"><span class="pip"></span><b>@k</b>ata-sprint-2-lead<small>desktop · 4m</small></div>
+      <div class="mi off"><span class="pip"></span><b>@k</b>ata-15-parser<small>idle · 14m</small></div>
+    </div>
+    <div class="line">
+      <label class="field ch"><svg class="i s" style="color:var(--faint)"><use href="#i-hash"/></svg><input id="chan" value="general" list="chanlist" aria-label="channel" /></label>
+      <datalist id="chanlist"><option value="general"><option value="demo-sprint"><option value="dm-kata-review"></datalist>
+      <label class="field ty"><select id="type" aria-label="message type"><option>message</option><option>status</option><option>request</option><option>response</option><option>handoff</option><option>done</option></select></label>
+      <label class="field body"><input id="body" value="@k" aria-label="message" /></label>
+      <button class="send" id="send"><svg class="i s"><use href="#i-send"/></svg>Send</button>
+    </div>
+    <div class="hint"><span><kbd>Enter</kbd> send</span><span><kbd>@</kbd> mention</span><span><kbd>/</kbd> focus</span><span><kbd>Ctrl</kbd>+<kbd>K</kbd> channel</span><span><kbd>Esc</kbd> clear filters</span></div>
+  </div>
+</main>
+
+<!-- ============================== WORK BOARD ============================== -->
+<aside class="rail right" aria-label="Work board">
+  <div class="sec" style="padding-bottom:0">
+    <h2><svg class="i s"><use href="#i-board"/></svg>Work board <span class="cnt">24 items</span><span class="win">live · 2s</span></h2>
+  </div>
+  <div class="wb-sum">
+    <div class="bar" title="queued 5 · claimed 3 · implementing 4 · in review 3 · merged 7 · blocked 1 · abandoned 1">
+      <i style="width:29%;background:var(--ok)"></i><i style="width:12.5%;background:var(--hand)"></i><i style="width:17%;background:var(--work)"></i><i style="width:12.5%;background:var(--info)"></i><i style="width:21%;background:var(--faint)"></i><i style="width:4%;background:var(--bad)"></i><i style="width:4%;background:var(--muted)"></i>
+    </div>
+    <div class="legend">
+      <span><i class="k" style="background:var(--ok)"></i>7 merged</span><span><i class="k" style="background:var(--hand)"></i>3 review</span><span><i class="k" style="background:var(--work)"></i>4 impl</span><span><i class="k" style="background:var(--info)"></i>3 claimed</span><span><i class="k" style="background:var(--faint)"></i>5 queued</span><span><i class="k" style="background:var(--bad)"></i>1 blocked</span>
+    </div>
+  </div>
+  <div class="wb-f">
+    <button class="fc on">all</button>
+    <button class="fc"><span class="k" style="background:var(--bad)"></span>blocked 1</button>
+    <button class="fc"><span class="k" style="background:var(--warn)"></span>stale 2</button>
+    <button class="fc">unowned 5</button>
+    <button class="fc">hide done</button>
+  </div>
+
+  <div class="epic">
+    <div class="eh"><span class="proj">kata-sprint-2</span>#13 Retry + backoff across the kata runner <span class="r">4 / 12</span></div>
+    <div class="wi blk"><span class="id">#20</span><span class="g blocked"><svg class="i s"><use href="#i-ban"/></svg></span><span class="tt">Flaky timeout in runner integration test</span><span class="r"><span class="tag bad">blocked</span><span class="ago">31m</span><button class="ib menu" title="Actions"><svg class="i s"><use href="#i-more"/></svg></button></span><span class="own">reviewer-a · waiting on #18</span></div>
+    <div class="wi stl"><span class="id">#18</span><span class="g review"><svg class="i s"><use href="#i-eye"/></svg></span><span class="tt">Retry semantics for transient failures</span><span class="r"><span class="tag warn">stale</span><span class="ago">22m</span><button class="ib menu" title="Actions"><svg class="i s"><use href="#i-more"/></svg></button></span><span class="own">kata-18-retry → reviewer-a</span></div>
+    <div class="wi"><span class="id">#19</span><span class="g impl"><svg class="i s"><use href="#i-wrench"/></svg></span><span class="tt">Backoff jitter + max-attempts config</span><span class="r"><span class="ago">2m</span><button class="ib menu" title="Actions"><svg class="i s"><use href="#i-more"/></svg></button></span><span class="own">kata-sprint-2-lead</span></div>
+    <div class="wi"><span class="id">#21</span><span class="g impl"><svg class="i s"><use href="#i-wrench"/></svg></span><span class="tt">Console: attention queue + board actions</span><span class="r"><span class="ago">now</span><button class="ib menu" title="Actions"><svg class="i s"><use href="#i-more"/></svg></button></span><span class="own">console-ux</span></div>
+    <div class="wi"><span class="id">#23</span><span class="g claimed"><svg class="i s"><use href="#i-half"/></svg></span><span class="tt">Structured error type for exhausted retries</span><span class="r"><span class="ago">7m</span><button class="ib menu" title="Actions"><svg class="i s"><use href="#i-more"/></svg></button></span><span class="own">demo-findings-handoff</span></div>
+    <div class="wi"><span class="id">#24</span><span class="g queued"><svg class="i s"><use href="#i-circle"/></svg></span><span class="tt">Retry metrics exposed on /health</span><span class="r"><span class="ago">1h</span><button class="ib menu" title="Actions"><svg class="i s"><use href="#i-more"/></svg></button></span><span class="own none">unowned</span></div>
+    <div class="wi done"><span class="id">#22</span><span class="g merged"><svg class="i s"><use href="#i-check"/></svg></span><span class="tt">README + examples for the retry API</span><span class="r"><span class="ago">6m</span></span><span class="own">kata-22-docs</span></div>
+    <div class="more">+ 5 more in this epic</div>
+  </div>
+
+  <div class="epic">
+    <div class="eh"><span class="proj">kata-sprint</span>#1 Kata sprint (complete) <span class="r">12 / 12</span></div>
+    <div class="wi done"><span class="id">#12</span><span class="g deployed"><svg class="i s"><use href="#i-up"/></svg></span><span class="tt">Release 0.4.0 tagged and published</span><span class="r"><span class="ago">2d</span></span><span class="own">kata-sprint-lead</span></div>
+    <div class="wi done"><span class="id">#11</span><span class="g merged"><svg class="i s"><use href="#i-check"/></svg></span><span class="tt">Parser handles nested fences</span><span class="r"><span class="ago">2d</span></span><span class="own">kata-15-parser</span></div>
+    <div class="wi abn"><span class="id">#9</span><span class="g abandoned"><svg class="i s"><use href="#i-x"/></svg></span><span class="tt">Alternative tokenizer (superseded by #11)</span><span class="r"><span class="ago">3d</span></span><span class="own">—</span></div>
+    <div class="more">+ 9 merged</div>
+  </div>
+</aside>
+
+<script>
+  // Prototype-only interactivity: theme, board toggle, settings popover, filter chips.
+  const root = document.documentElement;
+  document.getElementById('theme').onclick = () => {
+    const cur = root.getAttribute('data-theme');
+    const dark = cur ? cur === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches || true;
+    root.setAttribute('data-theme', dark ? 'light' : 'dark');
+  };
+  const pop = document.getElementById('pop'), gear = document.getElementById('gear');
+  gear.onclick = () => { pop.hidden = !pop.hidden; gear.classList.toggle('on', !pop.hidden); };
+  const board = document.getElementById('boardTog'), showBoard = document.getElementById('showBoard');
+  const setBoard = (on) => { document.body.classList.toggle('no-board', !on); board.classList.toggle('on', on); showBoard.classList.toggle('on', on); showBoard.setAttribute('aria-pressed', String(on)); };
+  board.onclick = () => setBoard(document.body.classList.contains('no-board'));
+  showBoard.onclick = () => setBoard(!showBoard.classList.contains('on'));
+  document.querySelectorAll('.sw').forEach((s) => { if (s === showBoard) return; s.onclick = () => { s.classList.toggle('on'); s.setAttribute('aria-pressed', String(s.classList.contains('on'))); }; });
+  document.querySelectorAll('.tb .fc, .wb-f .fc').forEach((c) => c.onclick = () => { [...c.parentElement.querySelectorAll('.fc')].forEach((x) => x.classList.remove('on')); c.classList.add('on'); });
+  document.querySelectorAll('.left .row').forEach((r) => r.onclick = () => { if (!r.classList.contains('who')) { [...r.parentElement.querySelectorAll('.row')].forEach((x) => x.classList.remove('sel')); r.classList.add('sel'); r.classList.remove('new'); const d = r.querySelector('.newdot'); if (d) d.remove(); document.querySelector('.tb .title').textContent = r.querySelector('.id').textContent; } });
+</script>
+</body>
+</html>
