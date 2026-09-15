@@ -49,7 +49,10 @@ const TOKEN = opt('--token', process.env.CC_TOKEN) || cfg.token;
 let BASE = null;
 async function ensureBase(full = false) {
   const leader = full ? await resolveFull({ pin: PIN, token: TOKEN }) : await resolveFast({ pin: PIN, token: TOKEN });
-  if (leader && leader.base !== BASE) { BASE = leader.base; console.log(`[bus leader → ${leader.host} epoch=${leader.epoch} @ ${BASE}]`); }
+  // Lifecycle chatter → stderr, NEVER stdout: a Monitor beacon treats every stdout line as a
+  // wake event, so leader-change/startup on stdout re-invoked idle sessions for nothing. Only
+  // rendered messages (the emit below) belong on stdout. Mirrors cc-ws.mjs.
+  if (leader && leader.base !== BASE) { BASE = leader.base; console.error(`[bus leader → ${leader.host} epoch=${leader.epoch} @ ${BASE}]`); }
   return BASE;
 }
 const ONLY = opt('--channel', null);
@@ -128,7 +131,7 @@ async function tick(seed = false) {
   await ensureBase(true);                             // full discovery scan at startup (no IP configured)
   await register();
   await tick(true);                                   // seed cursors (skips backlog unless --from-start)
-  console.log(`[listening as ${instance} on ${ONLY ? '#' + ONLY : 'all channels'} @ ${BASE || 'discovering…'}]`);
+  console.error(`[listening as ${instance} on ${ONLY ? '#' + ONLY : 'all channels'} @ ${BASE || 'discovering…'}]`);   // lifecycle → stderr (see ensureBase)
   setInterval(register, 20000);                       // heartbeat presence
   setInterval(() => tick(false).catch(() => {}), 2000);
 })();
