@@ -96,15 +96,18 @@ try {
   try { cli.close(); } catch {}
 
   // --- C + D: the cc-ws bridge, exactly-once across a socket drop ---
-  let out = '';
+  let out = '', err = '';
   bridge = spawn(process.execPath, [BRIDGE, 'bob', '--base', BASE, '--token', TOKEN], {
     env: { ...process.env, CC_DESC: 'ws test bob' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   bridge.stdout.on('data', (d) => { out += d.toString(); });
-  bridge.stderr.on('data', () => {});
-  // wait for seed/listening
-  { const end = Date.now() + 15000; while (Date.now() < end && !/listening as bob/.test(out)) await sleep(100); }
-  ok(/listening as bob/.test(out), 'bridge seeded and listening');
+  bridge.stderr.on('data', (d) => { err += d.toString(); });
+  // wait for seed/listening — lifecycle chatter now goes to STDERR so it never wakes a Monitor beacon
+  { const end = Date.now() + 15000; while (Date.now() < end && !/listening as bob/.test(err)) await sleep(100); }
+  ok(/listening as bob/.test(err), 'bridge seeded and listening (lifecycle on stderr)');
+  // The fix: lifecycle chatter must be kept OFF stdout (the Monitor event stream), so an idle
+  // session is not re-invoked on every connect/reconnect. Only rendered messages belong on stdout.
+  ok(!/listening as bob|push connected|bus leader/.test(out), 'lifecycle chatter kept off stdout');
 
   // C: a pushed DM shows exactly once (not doubled by the on-connect backfill)
   await send('dm-bob', 'DM_ONE hello bob', 'tester');

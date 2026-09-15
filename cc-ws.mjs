@@ -50,7 +50,12 @@ const shortId = instance.split('/').pop();
 let BASE = null;
 async function ensureBase(full = false) {
   const leader = full ? await resolveFull({ pin: PIN, token: TOKEN }) : await resolveFast({ pin: PIN, token: TOKEN });
-  if (leader && leader.base !== BASE) { BASE = leader.base; console.log(`[bus leader → ${leader.host} epoch=${leader.epoch} @ ${BASE}]`); }
+  // Lifecycle chatter → stderr, NEVER stdout. A Monitor(cc-ws) beacon treats every stdout
+  // line as a wake event; only rendered messages (the emit() below) should wake the session.
+  // Connection churn (leader change / reconnect / startup) on stdout re-invoked idle sessions
+  // every reconnect for nothing. stderr is still captured to the output file + shown when run
+  // by hand, but does not trigger a notification.
+  if (leader && leader.base !== BASE) { BASE = leader.base; console.error(`[bus leader → ${leader.host} epoch=${leader.epoch} @ ${BASE}]`); }
   return BASE;
 }
 
@@ -153,7 +158,7 @@ async function connectWS() {
   ws.addEventListener('open', async () => {
     wsLive = true;
     backoff = 1000;
-    console.log(`[push connected → ${BASE} as ${instance}]`);
+    console.error(`[push connected → ${BASE} as ${instance}]`);   // lifecycle → stderr (see ensureBase)
     stopPoll();                 // push takes over; no more polling
     await backfill();           // replay anything missed while the socket was down (or seed on first)
   });
@@ -193,6 +198,6 @@ async function reconnect() {
   await backfill();             // seed cursors (skips backlog unless --from-start)
   startPoll();                  // baseline receive until the socket is up (then it's stopped)
   await connectWS();            // attempt push; degrades to the poll already running
-  console.log(`[listening as ${instance} on ${ONLY ? '#' + ONLY : 'all channels'} @ ${BASE || 'discovering…'} (push+backfill)]`);
+  console.error(`[listening as ${instance} on ${ONLY ? '#' + ONLY : 'all channels'} @ ${BASE || 'discovering…'} (push+backfill)]`);   // lifecycle → stderr (see ensureBase)
   setInterval(register, 20000); // presence + beacon heartbeat, independent of transport
 })();

@@ -71,6 +71,15 @@ Use `@all` sparingly — it wakes every session, so it's for estate-wide signals
 **Reply-only-if-addressed:** even among the messages that reach you, answer only a direct DM/mention, a
 `»HANDOFF«`, or a question that concerns your lane. Don't dump chatter into `#general`.
 
+**Silent on routine wakes — no console narration.** The `Monitor` beacon expires every 30 min (its hard
+cap) and re-invokes you just to re-arm; you may also be woken by a bare reconnect. When a wake carries **no**
+`»TO YOU«` / `»HANDOFF«` message and **no** bus error, **re-arm the Monitor and emit nothing** — no "beacon
+re-armed", no "routine reconnect", no "standing by", no `※ recap`. Narrating every routine wake buries the
+real messages in noise and makes the operator's terminal unreadable. Produce user-facing text ONLY for an
+actual addressed message or a genuine bus problem. (The transport helps: connection-lifecycle lines go to
+stderr, which never triggers a wake — so a wake you *do* get is far more likely to matter. Don't undo that by
+narrating it anyway.)
+
 ## Ack on ownership change / attention (mandatory)
 When a peer **hands you ownership** (a `handoff`) or pushes something that **needs your attention / changes
 what you own**, you MUST acknowledge it into the SAME channel so the sender — and the operator console — see the task
